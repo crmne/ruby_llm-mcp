@@ -33,6 +33,43 @@ RSpec.describe RubyLLM::MCP::Native::Transports::StreamableHTTP do
     allow(logger).to receive(:info)
   end
 
+  describe "#handle_oauth_authorization_error" do
+    let(:response) { instance_double(HTTPX::Response) }
+
+    before do
+      allow(response).to receive(:respond_to?).with(:body).and_return(true)
+    end
+
+    def handle(body)
+      allow(response).to receive(:body).and_return(body)
+      transport.send(:handle_oauth_authorization_error, response, 403)
+    end
+
+    it "extracts the message from a JSON-RPC error body" do
+      expect do
+        handle('{"error": {"code": -32000, "message": "Token rejected"}}')
+      end.to raise_error(RubyLLM::MCP::Errors::TransportError, /Token rejected/)
+    end
+
+    it "raises a TransportError (not TypeError) for an RFC 6749 OAuth error body" do
+      expect do
+        handle('{"error": "invalid_token", "error_description": "The access token expired"}')
+      end.to raise_error(RubyLLM::MCP::Errors::TransportError, /The access token expired/)
+    end
+
+    it "falls back to the error code when error_description is absent" do
+      expect do
+        handle('{"error": "invalid_token"}')
+      end.to raise_error(RubyLLM::MCP::Errors::TransportError, /invalid_token/)
+    end
+
+    it "degrades gracefully for an unparseable body" do
+      expect do
+        handle("<html>403</html>")
+      end.to raise_error(RubyLLM::MCP::Errors::TransportError, /Check token scope and permissions/)
+    end
+  end
+
   describe "protocol version negotiation" do
     it "successfully initializes and negotiates protocol version" do
       client.start
