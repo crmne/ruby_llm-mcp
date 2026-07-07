@@ -958,14 +958,12 @@ RSpec.describe RubyLLM::MCP::Tool do
   describe RubyLLM::MCP::Annotation do
     describe "#initialize" do
       it "parses truthy annotation fields from hash" do
-        # NOTE: The implementation uses || for defaults, so false values get
-        # replaced with defaults. Only truthy values are preserved.
         annotation_data = {
           "title" => "My Custom Tool",
           "readOnlyHint" => true,
-          "destructiveHint" => true, # Using true since false gets default
+          "destructiveHint" => true,
           "idempotentHint" => true,
-          "openWorldHint" => true # Using true since false gets default
+          "openWorldHint" => true
         }
 
         annotation = described_class.new(annotation_data)
@@ -1000,16 +998,14 @@ RSpec.describe RubyLLM::MCP::Tool do
         expect(annotation.open_world_hint).to be(true) # Default
       end
 
-      it "applies defaults when false is provided (current || behavior)" do
-        # This test documents the current behavior: false values get defaults
+      it "preserves an explicit false instead of falling back to the default" do
         annotation = described_class.new({
                                            "destructiveHint" => false,
                                            "openWorldHint" => false
                                          })
 
-        # Because || false returns the right-hand side default
-        expect(annotation.destructive_hint).to be(true) # Got default
-        expect(annotation.open_world_hint).to be(true) # Got default
+        expect(annotation.destructive_hint).to be(false)
+        expect(annotation.open_world_hint).to be(false)
       end
     end
 
