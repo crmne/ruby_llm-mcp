@@ -183,6 +183,35 @@ RSpec.describe RubyLLM::MCP do
         expect(client_streamable_http).to have_received(:stop)
         expect(client_stdio).to have_received(:stop)
       end
+
+      it "starts and stops only selected clients" do
+        RubyLLM::MCP.establish_connection(client_names: ["stdio"]) { |_clients| "test" }
+
+        expect(client_stdio).to have_received(:start)
+        expect(client_stdio).to have_received(:stop)
+        expect(client_streamable_http).not_to have_received(:start)
+        expect(client_streamable_http).not_to have_received(:stop)
+      end
+
+      it "keeps a shared client alive until the outer connection scope exits" do
+        RubyLLM::MCP.establish_connection(client_names: ["stdio"]) do
+          RubyLLM::MCP.establish_connection(client_names: ["stdio"]) { |_clients| "nested" }
+
+          expect(client_stdio).not_to have_received(:stop)
+        end
+
+        expect(client_stdio).to have_received(:stop).once
+      end
+
+      it "releases earlier clients when a later client fails to start" do
+        allow(client_stdio).to receive(:start).and_raise("start failed")
+
+        expect do
+          RubyLLM::MCP.establish_connection { |_clients| "test" }
+        end.to raise_error("start failed")
+
+        expect(client_streamable_http).to have_received(:stop)
+      end
     end
   end
 
@@ -257,6 +286,79 @@ RSpec.describe RubyLLM::MCP do
 
       expect(tools.size).to eq(3)
       expect(tools.map(&:name)).to contain_exactly("add", "sub", "multiply")
+    end
+  end
+
+  describe "#toolset" do
+    let(:read_file) { instance_double(RubyLLM::MCP::Tool, name: "read_file") }
+    let(:delete_file) { instance_double(RubyLLM::MCP::Tool, name: "delete_file") }
+    let(:list_projects) { instance_double(RubyLLM::MCP::Tool, name: "list_projects") }
+    let(:filesystem_client) do
+      instance_double(RubyLLM::MCP::Client, name: "filesystem", tools: [read_file, delete_file])
+    end
+    let(:projects_client) { instance_double(RubyLLM::MCP::Client, name: "projects", tools: [list_projects]) }
+    let(:clients) do
+      {
+        "filesystem" => filesystem_client,
+        "projects" => projects_client
+      }
+    end
+
+    before do
+      RubyLLM::MCP.instance_variable_set(:@toolsets, nil)
+    end
+
+    after do
+      RubyLLM::MCP.instance_variable_set(:@toolsets, nil)
+    end
+
+    it "raises when both options and a block are provided" do
+      expect do
+        RubyLLM::MCP.toolset(:support, clients: [:filesystem]) do |toolset|
+          toolset.include_tools("read_file")
+        end
+      end.to raise_error(ArgumentError, /Provide either configuration options or a block, not both/)
+
+      expect(RubyLLM::MCP.toolsets).not_to have_key(:support)
+    end
+
+    it "rejects unknown options before exposing an unfiltered toolset" do
+      expect do
+        RubyLLM::MCP.toolset(:support, exclude_tool: ["delete_file"])
+      end.to raise_error(ArgumentError, /Unknown toolset option: exclude_tool/)
+
+      expect(RubyLLM::MCP.toolsets).not_to have_key(:support)
+    end
+
+    it "supports string keys and alias option names" do
+      toolset = RubyLLM::MCP.toolset(
+        "support",
+        {
+          "clients" => ["filesystem"],
+          "client_names" => ["projects"],
+          "include_tools" => ["read_file"],
+          "include" => ["list_projects"],
+          "exclude_tools" => ["delete_file"],
+          "exclude" => ["list_projects"]
+        }
+      )
+
+      tool_names = toolset.tools(clients: clients).map(&:name)
+      expect(tool_names).to eq(["read_file"])
+    end
+
+    it "resets filters when aliases are passed empty arrays" do
+      RubyLLM::MCP.toolset(
+        :support,
+        clients: ["filesystem"],
+        include_tools: ["read_file"],
+        exclude_tools: ["delete_file"]
+      )
+
+      RubyLLM::MCP.toolset(:support, clients: [], include: [], exclude: [])
+
+      tool_names = RubyLLM::MCP.toolset(:support).tools(clients: clients).map(&:name)
+      expect(tool_names).to contain_exactly("read_file", "delete_file", "list_projects")
     end
   end
 
