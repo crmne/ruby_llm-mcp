@@ -8,9 +8,9 @@ module RubyLLM
       def initialize(annotation)
         @title = annotation["title"] || ""
         @read_only_hint = annotation["readOnlyHint"] || false
-        @destructive_hint = annotation["destructiveHint"] || true
+        @destructive_hint = annotation.fetch("destructiveHint", true)
         @idempotent_hint = annotation["idempotentHint"] || false
-        @open_world_hint = annotation["openWorldHint"] || true
+        @open_world_hint = annotation.fetch("openWorldHint", true)
       end
 
       def to_h
