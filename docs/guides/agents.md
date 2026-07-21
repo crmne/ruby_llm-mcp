@@ -9,6 +9,9 @@ description: "Define reusable MCP toolsets and wire them into RubyLLM agents wit
 # Agents
 {: .no_toc }
 
+{: .label .label-yellow }
+New in v1.1
+
 This guide covers two integration points:
 
 - `RubyLLM::MCP.toolset` for declaring named MCP tool groups.
