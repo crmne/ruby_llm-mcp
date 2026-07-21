@@ -21,12 +21,15 @@ module RubyLLM
         end
       end
 
-      attr_reader :name, :description, :arguments, :adapter
+      attr_reader :name, :title, :description, :arguments, :adapter, :icons, :meta
 
       def initialize(adapter, prompt)
         @adapter = adapter
         @name = prompt["name"]
+        @title = prompt["title"]
         @description = prompt["description"]
+        @icons = prompt["icons"] || []
+        @meta = prompt["_meta"] || {}
         @arguments = parse_arguments(prompt["arguments"])
       end
 

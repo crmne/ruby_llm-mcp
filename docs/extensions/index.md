@@ -84,7 +84,7 @@ Extension advertisement is protocol-version aware.
 ## Adapter Modes
 
 - `:ruby_llm` adapter: **full** extension mode (`capabilities.extensions` advertised when protocol supports it)
-- `:mcp_sdk` adapter: **passive** extension mode (config accepted, metadata parsing still works, no extension capability advertisement)
+- `:mcp_sdk` adapter: **full** extension mode through the official 0.25 `connect` handshake
 
 ## Next Steps
 

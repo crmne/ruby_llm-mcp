@@ -38,7 +38,7 @@ gem 'ruby_llm-mcp', '~> 1.0'
 Optional - for MCP SDK adapter (requires Ruby 3.1+):
 
 ```ruby
-gem 'mcp', '~> 0.7'
+gem 'mcp', '~> 0.25'
 ```
 
 Then run:

@@ -14,6 +14,8 @@ description: "Complete OAuth 2.1 implementation with PKCE, dynamic registration,
 
 Comprehensive OAuth 2.1 support for MCP servers with automatic token management, browser-based authentication, and pluggable storage.
 
+This page documents RubyLLM::MCP's native OAuth provider used by `adapter: :ruby_llm`. The `:mcp_sdk` HTTP adapter instead accepts official `MCP::Client::OAuth` providers, including authorization code, client credentials, `private_key_jwt`, and Cross-App Access/ID-JAG. See [Official MCP SDK 0.25]({% link guides/mcp-sdk-0.25.md %}#official-oauth-providers).
+
 ## Table of contents
 {: .no_toc .text-delta }
 
@@ -41,8 +43,9 @@ Comprehensive OAuth 2.1 support for MCP servers with automatic token management,
 
 | Transport | OAuth Support | Details |
 |-----------|---------------|---------|
-| **SSE** | ✅ Full support | Event streams and message endpoints |
-| **StreamableHTTP** | ✅ Full support | All HTTP requests with session management |
+| **Native SSE** | ✅ Full support | RubyLLM::MCP native provider |
+| **Native StreamableHTTP** | ✅ Full support | RubyLLM::MCP native provider |
+| **SDK Streamable HTTP** | ✅ Full support | Official `MCP::Client::OAuth` providers |
 | **Stdio** | N/A | Local process communication (no auth needed) |
 
 ## Architecture

@@ -66,36 +66,22 @@ RSpec.describe RubyLLM::MCP::Adapters::RubyLLMAdapter do # rubocop:disable RSpec
   end
 
   describe RubyLLM::MCP::Adapters::MCPSdkAdapter do
-    let(:adapter) { described_class.allocate }
-
-    before do
-      described_class.instance_variable_set(:@extensions_warning_emitted, nil)
-      described_class.instance_variable_set(:@extensions_warning_mutex, nil)
+    let(:adapter) do
+      described_class.allocate.tap do |instance|
+        instance.instance_variable_set(:@config, { extensions: { extension_id => { "enabled" => true } } })
+      end
     end
 
-    it "reports passive extension support mode" do
-      expect(adapter.supports_extension_negotiation?).to be(false)
-      expect(adapter.extension_mode).to eq(:passive)
-      expect(adapter.build_client_extensions_capabilities(protocol_version: "2026-01-26")).to eq({})
+    it "negotiates extensions through the official SDK handshake" do
+      expect(adapter.supports_extension_negotiation?).to be(true)
+      expect(adapter.extension_mode).to eq(:full)
+      expect(adapter.build_client_extensions_capabilities(protocol_version: "2025-11-25")).to eq(
+        extension_id => { "enabled" => true }
+      )
     end
 
-    it "emits passive support warning once per process when extensions are configured" do
-      logger = instance_double(Logger, warn: nil)
-      allow(RubyLLM::MCP).to receive(:logger).and_return(logger)
-
-      adapter_one = described_class.allocate
-      adapter_one.instance_variable_set(:@config, { extensions: { extension_id => {} } })
-
-      adapter_two = described_class.allocate
-      adapter_two.instance_variable_set(:@config, { extensions: { extension_id => {} } })
-
-      expect(adapter_one.send(:configured_extensions?)).to be(true)
-      expect(adapter_two.send(:configured_extensions?)).to be(true)
-
-      adapter_one.send(:warn_passive_extension_support!)
-      adapter_two.send(:warn_passive_extension_support!)
-
-      expect(logger).to have_received(:warn).once
+    it "suppresses extension capabilities on pre-extension protocol versions" do
+      expect(adapter.build_client_extensions_capabilities(protocol_version: "2025-03-26")).to eq({})
     end
 
     it "passes through tool _meta for apps metadata parsing parity" do

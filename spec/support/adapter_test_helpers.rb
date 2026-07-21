@@ -68,7 +68,8 @@ module AdapterTestHelpers
   def each_client_supporting(*features, &block)
     filtered_configs = CLIENT_OPTIONS.select do |config|
       adapter_class = get_adapter_class(config[:adapter])
-      features.all? { |feature| adapter_class.support?(feature) }
+      transport = config.dig(:options, :transport_type)
+      features.all? { |feature| adapter_class.support?(feature, transport: transport) }
     end
 
     filtered_configs.each do |config|
@@ -99,7 +100,8 @@ module AdapterTestHelpers
   def clients_supporting(*features)
     CLIENT_OPTIONS.select do |config|
       adapter_class = get_adapter_class(config[:adapter])
-      features.all? { |feature| adapter_class.support?(feature) }
+      transport = config.dig(:options, :transport_type)
+      features.all? { |feature| adapter_class.support?(feature, transport: transport) }
     end
   end
 
@@ -110,7 +112,7 @@ module AdapterTestHelpers
   # @return [Boolean] Whether the client's adapter supports the feature
   def client_supports?(config, feature)
     adapter_class = get_adapter_class(config[:adapter])
-    adapter_class.support?(feature)
+    adapter_class.support?(feature, transport: config.dig(:options, :transport_type))
   end
 
   private

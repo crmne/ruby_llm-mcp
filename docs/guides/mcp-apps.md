@@ -57,8 +57,7 @@ client = RubyLLM::MCP.client(
 )
 ```
 
-Use `:ruby_llm` when you want full extension capability advertisement.  
-`:mcp_sdk` accepts the same config but remains passive for extension advertisement.
+Both `:ruby_llm` and `:mcp_sdk` advertise this extension when using a supported protocol. The native adapter performs its own handshake; the SDK adapter passes it through `MCP::Client#connect`.
 
 ## Step 3: Inspect MCP Apps Metadata
 
@@ -118,7 +117,7 @@ RubyLLM MCP canonicalizes IDs and deep-merges client extension settings over glo
 
 - Putting `resourceUri` or `visibility` in `enable_apps` (those belong in tool `_meta.ui`)
 - Expecting extension advertisement on protocol versions before `2025-06-18`
-- Assuming `:mcp_sdk` advertises extension capabilities (it does not)
+- Using a protocol older than `2025-06-18`, where extensions are not negotiated
 
 ## Next Steps
 

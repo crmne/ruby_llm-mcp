@@ -114,10 +114,12 @@ FILESYSTEM_CLIENT = {
 #                human_in_the_loop, elicitation, subscriptions
 #    - Transports: stdio, sse, streamable, streamable_http
 #
-# 2. MCPSdkAdapter - Wrapper around the official MCP SDK gem
-#    - Supports: tools, prompts, resources, resource_templates, logging (basic features)
-#    - Transports: stdio, http, streamable, streamable_http
-#    - Requires: gem 'mcp', '~> 0.7' (optional - tests will skip if not installed)
+# 2. MCPSdkAdapter - Official MCP SDK 0.25 integration
+#    - Supports: tools, prompts, resources, resource_templates, completions,
+#                pagination, structured output, and extension negotiation
+#    - HTTP additionally supports OAuth, sampling, and elicitation
+#    - Transports: official stdio and Streamable HTTP
+#    - Requires: gem 'mcp', '~> 0.25' (optional - tests skip if unavailable)
 #
 # Testing DSL:
 #   Use `each_client` to run tests on all available adapters

@@ -6,7 +6,9 @@ gemspec
 
 group :development do
   if RUBY_VERSION >= "3.1.0"
-    gem "mcp", "~> 0.7"
+    gem "event_stream_parser", ">= 1"
+    gem "faraday", ">= 2"
+    gem "mcp", "~> 0.25"
   end
 
   # Development dependencies

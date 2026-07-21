@@ -46,7 +46,10 @@ RSpec.describe RubyLLM::MCP::Sample do
     expect(sample.message).to eq("Hello, how are you?\nI'm good, thank you!")
   end
 
-  each_client_supporting(:sampling) do |config|
+  # Native sampling exercises the full callback/model/VCR matrix here. The
+  # official SDK HTTP round trip has dedicated coverage without WebMock,
+  # whose Net::HTTP interception blocks the SDK's concurrent SSE listener.
+  each_client(adapter: :native) do |config|
     let(:client) { RubyLLM::MCP::Client.new(**config[:options], start: false) }
 
     after do

@@ -8,7 +8,7 @@ module RubyLLM
       extend Forwardable
 
       attr_reader :name, :config, :transport_type, :request_timeout, :log_level, :on, :roots, :adapter,
-                  :on_logging_level
+                  :on_logging_level, :adapter_type
       attr_accessor :linked_resources
 
       def initialize(name:, transport_type:, sdk: nil, adapter: nil, start: true, # rubocop:disable Metrics/ParameterLists, Metrics/MethodLength
@@ -16,6 +16,7 @@ module RubyLLM
         @name = name
         @transport_type = transport_type.to_sym
         @adapter_type = adapter || sdk || MCP.config.default_adapter
+        @adapter_type = @adapter_type.to_sym
 
         # Validate early
         MCP.config.adapter_config.validate!(
@@ -49,6 +50,7 @@ module RubyLLM
         @resources = {}
         @resource_templates = {}
         @prompts = {}
+        @cache_expirations = {}
 
         @log_level = nil
 
@@ -79,6 +81,23 @@ module RubyLLM
 
       def restart!
         @adapter.restart!
+      end
+
+      # Returns the official SDK client when this client uses adapter: :mcp_sdk.
+      # Direct SDK calls bypass RubyLLM::MCP result normalization.
+      def sdk_client
+        unless @adapter_type == :mcp_sdk
+          raise Errors::UnsupportedFeature.new(
+            message: "sdk_client is only available when using adapter: :mcp_sdk"
+          )
+        end
+
+        start unless alive?
+        @adapter.mcp_client
+      end
+
+      def cache_hints
+        @adapter.cache_hints
       end
 
       # Get or create OAuth provider for this client
@@ -135,6 +154,7 @@ module RubyLLM
 
       def reset_tools!
         @tools = {}
+        @cache_expirations.delete(:tools)
       end
 
       def resources(refresh: false)
@@ -172,6 +192,7 @@ module RubyLLM
 
       def reset_resources!
         @resources = {}
+        @cache_expirations.delete(:resources)
       end
 
       def resource_templates(refresh: false)
@@ -194,6 +215,7 @@ module RubyLLM
 
       def reset_resource_templates!
         @resource_templates = {}
+        @cache_expirations.delete(:resource_templates)
       end
 
       def prompts(refresh: false)
@@ -216,6 +238,7 @@ module RubyLLM
 
       def reset_prompts!
         @prompts = {}
+        @cache_expirations.delete(:prompts)
       end
 
       def tasks_list
@@ -336,7 +359,7 @@ module RubyLLM
       end
 
       def elicitation_enabled?
-        @adapter_type == :ruby_llm && MCP.config.elicitation.enabled?
+        @adapter.supports?(:elicitation) && MCP.config.elicitation.enabled?
       end
 
       def elicitation_callback_enabled?
@@ -405,7 +428,7 @@ module RubyLLM
         return nil unless @adapter
 
         # For RubyLLMAdapter
-        if @adapter.respond_to?(:native_client)
+        if @adapter_type == :ruby_llm && @adapter.respond_to?(:native_client)
           transport = @adapter.native_client.transport
           transport_protocol = transport.transport_protocol
           return transport_protocol.oauth_provider if transport_protocol.respond_to?(:oauth_provider)
@@ -451,11 +474,28 @@ module RubyLLM
       end
 
       def fetch(cache_key, refresh)
-        instance_variable_set("@#{cache_key}", {}) if refresh
+        refresh ||= cache_expired?(cache_key)
+        if refresh
+          instance_variable_set("@#{cache_key}", {})
+          @cache_expirations.delete(cache_key)
+        end
         if instance_variable_get("@#{cache_key}").empty?
           instance_variable_set("@#{cache_key}", yield)
+          update_cache_expiration(cache_key)
         end
         instance_variable_get("@#{cache_key}")
+      end
+
+      def cache_expired?(cache_key)
+        expires_at = @cache_expirations[cache_key]
+        expires_at && Process.clock_gettime(Process::CLOCK_MONOTONIC) >= expires_at
+      end
+
+      def update_cache_expiration(cache_key)
+        ttl_ms = @adapter.cache_hints.dig(cache_key, :ttl_ms)
+        return @cache_expirations.delete(cache_key) if ttl_ms.nil?
+
+        @cache_expirations[cache_key] = Process.clock_gettime(Process::CLOCK_MONOTONIC) + (ttl_ms.to_f / 1000)
       end
 
       def build_map(raw_data, klass, with_prefix: false)

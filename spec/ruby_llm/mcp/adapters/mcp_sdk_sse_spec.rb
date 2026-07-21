@@ -1,94 +1,18 @@
 # frozen_string_literal: true
 
-class MCPSdkSSERunner
-  class << self
-    def instance
-      @instance ||= MCPSdkSSERunner.new
-    end
-  end
-
-  def start
-    client.start
-  end
-
-  def stop
-    client&.stop
-  end
-
-  def client
-    @client ||= RubyLLM::MCP::Client.new(
-      name: "fast-mcp-ruby-sdk",
-      adapter: :mcp_sdk,
-      transport_type: :sse,
-      config: {
-        url: "http://localhost:#{TestServerManager::PORTS[:sse]}/mcp/sse",
-        version: :http1
-      }
-    )
-  end
-end
-
 RSpec.describe RubyLLM::MCP::Adapters::MCPSdkAdapter do # rubocop:disable RSpec/SpecFilePathFormat
-  let(:client) { MCPSdkSSERunner.instance.client }
-
-  before(:all) do # rubocop:disable RSpec/BeforeAfterAll
-    if RUBY_VERSION < "3.1.0" || !ClientRunner.mcp_sdk_available?
-      skip "Specs require Ruby 3.1+ with the mcp gem available"
-    else
-      MCPSdkSSERunner.instance.start
-    end
-  end
-
-  after(:all) do # rubocop:disable RSpec/BeforeAfterAll
-    if RUBY_VERSION >= "3.1.0" && ClientRunner.mcp_sdk_available?
-      MCPSdkSSERunner.instance.stop
-    end
-  end
-
-  describe "connection" do
-    it "starts the transport and establishes connection" do
-      expect(client.alive?).to be(true)
-    end
-  end
-
-  describe "tools" do
-    it "can list tools over SSE" do
-      tools = client.tools
-      expect(tools.count).to eq(2)
-    end
-
-    it "can execute a tool over SSE" do
-      tool = client.tool("CalculateTool")
-      result = tool.execute(operation: "add", x: 1.0, y: 2.0)
-      expect(result.to_s).to eq("3.0")
-    end
-  end
-
-  describe "resources" do
-    it "can list resources over SSE" do
-      resources = client.resources
-      expect(resources.count).to eq(1)
-    end
-
-    it "can read a resource over SSE" do
-      resource = client.resources.first
-      content = resource.content
-      expect(content).not_to be_nil
-      expect(content).to be_a(String)
-    end
-  end
-
-  describe "transport lifecycle" do
-    it "can restart the connection" do
-      client.stop
-      expect(client.alive?).to be(false)
-
-      client.start
-      expect(client.alive?).to be(true)
-
-      # Verify functionality after restart
-      tools = client.tools
-      expect(tools.count).to eq(2)
-    end
+  it "keeps legacy SSE on the native adapter" do
+    expect do
+      RubyLLM::MCP::Client.new(
+        name: "legacy-sse",
+        adapter: :mcp_sdk,
+        transport_type: :sse,
+        start: false,
+        config: { url: "http://localhost:3006/mcp/sse" }
+      )
+    end.to raise_error(
+      RubyLLM::MCP::Errors::AdapterConfigurationError,
+      /Use adapter: :ruby_llm for legacy SSE/
+    )
   end
 end

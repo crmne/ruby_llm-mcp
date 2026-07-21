@@ -14,7 +14,7 @@ RubyLLM::MCP is a Ruby client for the [Model Context Protocol (MCP)](https://mod
 
 Use MCP tools, resources, and prompts from your RubyLLM chats over `stdio`, streamable HTTP, or SSE.
 
-**Protocol support:** Fully supports MCP spec `2025-06-18` (stable), with draft spec `2026-01-26` available.
+**Protocol support:** Fully supports MCP spec `2025-11-25` (stable), with draft spec `2026-01-26` available.
 
 ## RubyLLM::MCP Out of the Box
 
@@ -23,7 +23,7 @@ Our goal is to be able to plug MCP into Ruby/RubyLLM apps as easily as possible.
 RubyLLM::MCP gives you that:
 
 - Ruby-first API for using MCP tools, resources, and prompts directly in RubyLLM chat workflows
-- Stable protocol track by default (`2025-06-18`), with opt-in draft track (`2026-01-26`)
+- Stable protocol track by default (`2025-11-25`), with opt-in draft track (`2026-01-26`)
 - Built-in notification and response handlers for real-time and interactive workflows
 - MCP OAuth 2.1 authentication support (PKCE, dynamic registration, discovery, and automatic token refresh)
 - OAuth setup paths for Rails apps (per-user connections) and browser-based CLI flows
@@ -154,7 +154,11 @@ bundle install
 If you want the official SDK adapter, also add:
 
 ```ruby
-gem "mcp", "~> 0.7"
+gem "mcp", "~> 0.25"
+
+# Also required when mcp_sdk uses Streamable HTTP
+gem "faraday", ">= 2"
+gem "event_stream_parser", ">= 1"
 ```
 
 ## Rails

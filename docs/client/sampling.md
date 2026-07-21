@@ -11,6 +11,8 @@ description: "MCP sampling - allow servers to use your LLM for their own request
 
 MCP sampling allows servers to offload LLM requests to your client rather than making them directly. This enables servers to use your LLM connections and configurations while maintaining their own logic and workflows.
 
+Sampling is available through the native adapter's supported transports and through `:mcp_sdk` Streamable HTTP. Official SDK stdio does not expose server-request handlers in version 0.25.
+
 ## Table of contents
 {: .no_toc .text-delta }
 

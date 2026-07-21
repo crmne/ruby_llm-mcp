@@ -114,21 +114,10 @@ RSpec.describe RubyLLM::MCP::Adapters::MCPSdkAdapter do # rubocop:disable RSpec/
   end
 
   describe "logging" do
-    it "can set log level and receive logging notifications over stdio" do
-      received_notification = nil
-      client.on_logging(level: RubyLLM::MCP::Logging::DEBUG) do |notification|
-        received_notification = notification
-      end
-
-      client.tool("log_message").execute(message: "stdio sdk log", level: "debug", logger: "sdk-stdio")
-
-      Timeout.timeout(3) do
-        sleep 0.05 until received_notification
-      end
-
-      expect(received_notification.params["level"]).to eq("debug")
-      expect(received_notification.params["logger"]).to eq("sdk-stdio")
-      expect(received_notification.params.dig("data", "message")).to eq("stdio sdk log")
+    it "directs notification logging users to the native adapter" do
+      expect do
+        client.on_logging(level: RubyLLM::MCP::Logging::DEBUG) { nil }
+      end.to raise_error(RubyLLM::MCP::Errors::UnsupportedFeature, /ruby_llm adapter/)
     end
   end
 

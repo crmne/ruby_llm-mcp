@@ -98,8 +98,8 @@ puts meta.permissions.inspect
 ## Adapter Notes
 
 - `:ruby_llm` and `:mcp_sdk` both expose parsed `apps_metadata`
-- Only `:ruby_llm` advertises extension capabilities in full mode
-- `:mcp_sdk` remains passive for capability advertisement
+- Both adapters expose parsed metadata and advertise extension capabilities on supported protocol versions
+- `:mcp_sdk` delegates negotiation to the official SDK 0.25 lifecycle
 
 ## Practical Flow
 

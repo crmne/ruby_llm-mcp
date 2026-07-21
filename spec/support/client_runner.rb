@@ -7,7 +7,7 @@ class ClientRunner
     def mcp_sdk_available?
       @mcp_sdk_available ||= begin
         require "mcp"
-        true
+        Gem::Version.new(MCP::VERSION) >= Gem::Version.new("0.25.0")
       rescue LoadError
         false
       end

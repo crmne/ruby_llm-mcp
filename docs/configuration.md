@@ -97,14 +97,15 @@ end
 ### Adapter Options
 
 **`:ruby_llm`** (default)
-- Full MCP protocol implementation
-- All transport types (stdio, SSE, HTTP)
-- Advanced features (sampling, roots, progress tracking, etc.)
+- Independent RubyLLM::MCP protocol implementation and transports
+- Stdio, legacy SSE, and Streamable HTTP
+- Full notification-oriented feature set, roots, subscriptions, progress, tasks, sampling, and elicitation
 
 **`:mcp_sdk`**
-- Official Anthropic-maintained SDK
-- Core features only (tools, resources, prompts)
-- Limited transport support (stdio, HTTP - no SSE)
+- Official Model Context Protocol Ruby SDK 0.25
+- Official stdio and Streamable HTTP transports only
+- Tools, resources, prompts, templates, completions, pagination, structured output, cache hints, and extensions
+- HTTP additionally supports official OAuth providers, sampling, and elicitation
 
 See the [Adapters Guide]({% link guides/adapters.md %}) for detailed feature comparison and usage examples.
 
@@ -442,7 +443,7 @@ The RubyLLM MCP client supports multiple protocol versions. You can access these
 ```ruby
 # Latest supported protocol version
 puts RubyLLM::MCP::Native::Protocol.latest_version
-# => "2025-06-18"
+# => "2025-11-25"
 
 # Draft protocol version (opt-in)
 puts RubyLLM::MCP::Native::Protocol.draft_version
@@ -454,7 +455,7 @@ puts RubyLLM::MCP::Native::Protocol.default_negotiated_version
 
 # All supported versions
 puts RubyLLM::MCP::Native::Protocol.supported_versions
-# => ["2026-01-26", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"]
+# => ["2026-01-26", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"]
 
 # Check if a version is supported
 RubyLLM::MCP::Native::Protocol.supported_version?("2025-06-18")
@@ -466,7 +467,8 @@ RubyLLM::MCP::Native::Protocol.supported_version?("2025-06-18")
 Different protocol versions support different features:
 
 - **2026-01-26** (Draft, opt-in): Draft extension negotiation path
-- **2025-06-18** (Latest): Structured tool output, OAuth authentication, elicitation support, resource links, enhanced metadata
+- **2025-11-25** (Latest stable): Current stable lifecycle and client/server feature set
+- **2025-06-18**: Structured tool output, OAuth authentication, elicitation support, resource links, enhanced metadata
 - **2025-03-26** (Default): Tool calling, resources, prompts, completions, notifications
 - **2024-11-05**: Basic tool and resource support
 - **2024-10-07**: Initial MCP implementation
@@ -516,7 +518,8 @@ Notes:
 - Outbound extension advertisement uses canonical ID `io.modelcontextprotocol/ui`
 - Alias `io.modelcontextprotocol/apps` is accepted for inbound capability reads and config merge
 - Extension advertisement is supported on stable `2025-06-18+` and draft protocol versions
-- `:mcp_sdk` accepts extension config in passive mode (no capability advertisement, one warning per process when configured)
+- Both adapters advertise configured extensions on supported protocol versions
+- The SDK adapter passes extension capabilities through its official `connect` handshake
 
 For architecture and MCP Apps metadata details, see **[Client Extensions]({% link extensions/index.md %})** and **[MCP Apps]({% link extensions/mcp-apps.md %})**.
 

@@ -42,8 +42,14 @@ module RubyLLM
         end
 
         def validate_adapter_transport_combination!(adapter, transport)
-          # SSE is supported by both ruby_llm and mcp_sdk adapters
-          # No validation needed at this time
+          return unless adapter == :mcp_sdk && transport == :sse
+
+          raise Errors::AdapterConfigurationError.new(
+            message: <<~MSG.strip
+              Transport 'sse' is native-only and is not supported by the mcp_sdk adapter.
+              Use adapter: :ruby_llm for legacy SSE, or use transport_type: :streamable_http with adapter: :mcp_sdk.
+            MSG
+          )
         end
       end
 

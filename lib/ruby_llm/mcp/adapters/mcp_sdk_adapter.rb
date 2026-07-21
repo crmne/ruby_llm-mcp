@@ -1,22 +1,23 @@
 # frozen_string_literal: true
 
-require_relative "mcp_transports/coordinator_stub"
-require_relative "mcp_transports/stdio"
-require_relative "mcp_transports/sse"
-require_relative "mcp_transports/streamable_http"
-
 module RubyLLM
   module MCP
     module Adapters
+      # Adapter backed exclusively by the official mcp gem. Native transports and
+      # protocol behavior remain owned by RubyLLMAdapter.
       class MCPSdkAdapter < BaseAdapter
-        # Only declare features the official MCP SDK supports
-        supports :tools, :resources, :prompts, :resource_templates, :logging
+        SDK_REQUIREMENT = Gem::Requirement.new("~> 0.25")
+        HTTP_TRANSPORTS = %i[http streamable streamable_http].freeze
+        COLLECTION_METHODS = {
+          tools: ["tools/list", "tools"],
+          resources: ["resources/list", "resources"],
+          resource_templates: ["resources/templates/list", "resourceTemplates"],
+          prompts: ["prompts/list", "prompts"]
+        }.freeze
 
-        # Supported transports:
-        # - stdio: Via custom wrapper using native stdio transport ✓ FULLY TESTED
-        # - sse: Via custom wrapper using native SSE transport ✓ FUNCTIONAL
-        # - http: Via MCP::Client::HTTP (for simple JSON-only HTTP servers)
-        supports_transport :stdio, :http, :sse, :streamable, :streamable_http
+        supports :tools, :resources, :prompts, :resource_templates, :completions
+        supports_on(*HTTP_TRANSPORTS, features: %i[oauth sampling elicitation])
+        supports_transport :stdio, *HTTP_TRANSPORTS
 
         attr_reader :transport_type, :config, :mcp_client
 
@@ -26,25 +27,41 @@ module RubyLLM
           super
 
           @mcp_client = nil
-          @notification_handler = NotificationHandler.new(client)
-          warn_passive_extension_support! if configured_extensions?
+          @server_info = nil
+          @cache_hints = {}
+          @elicitation_enabled = MCP.config.elicitation.enabled?
         end
 
         def start
-          return if @mcp_client
+          return if alive?
 
-          transport = build_transport
-          transport.start if transport.respond_to?(:start)
+          @mcp_client = ::MCP::Client.new(transport: build_transport)
+          register_server_request_handlers
+          connect_result = with_sdk_errors do
+            @mcp_client.connect(
+              client_info: { name: client.name, version: RubyLLM::MCP::VERSION },
+              protocol_version: protocol_version,
+              capabilities: client_capabilities
+            )
+          end
+          @server_info = connect_result || @mcp_client.server_info
+          unless @server_info.is_a?(Hash)
+            raise Errors::TransportError.new(message: "Official MCP SDK connected without server information")
+          end
 
-          @mcp_client = ::MCP::Client.new(transport: transport)
-          set_logging(level: client.on_logging_level) if client.logging_handler_enabled?
+          @capabilities = ServerCapabilities.new(@server_info.fetch("capabilities", {}))
+        rescue StandardError
+          stop
+          raise
         end
 
         def stop
-          if @mcp_client && @mcp_client.transport.respond_to?(:close)
-            @mcp_client.transport.close
-          end
+          @mcp_client&.transport&.close
+        ensure
           @mcp_client = nil
+          @server_info = nil
+          @capabilities = nil
+          @cache_hints = {}
         end
 
         def restart!
@@ -53,357 +70,475 @@ module RubyLLM
         end
 
         def alive?
-          !@mcp_client.nil?
-        end
-
-        def ping # rubocop:disable Naming/PredicateMethod
-          ensure_started
-          alive?
-        end
-
-        def capabilities
-          # Return minimal capabilities for official SDK
-          @capabilities ||= ServerCapabilities.new(
-            "tools" => {},
-            "resources" => {},
-            "prompts" => {},
-            "logging" => {}
-          )
-        end
-
-        def client_capabilities
-          {} # Official SDK handles this internally
-        end
-
-        def supports_extension_negotiation?
+          !!@mcp_client&.connected?
+        rescue StandardError
           false
         end
 
-        def extension_mode
-          :passive
-        end
-
-        def build_client_extensions_capabilities(protocol_version:) # rubocop:disable Lint/UnusedMethodArgument
-          {}
-        end
-
-        def tool_list(cursor: nil) # rubocop:disable Lint/UnusedMethodArgument
+        def ping
           ensure_started
-          @mcp_client.tools.map { |tool| transform_tool(tool) }
+          with_sdk_errors { @mcp_client.ping == {} }
+        rescue Errors::TransportError, Errors::SessionExpiredError
+          false
+        end
+
+        def capabilities
+          info = @server_info || @mcp_client&.server_info || {}
+          @capabilities ||= ServerCapabilities.new(info["capabilities"] || {})
+        end
+
+        def client_capabilities
+          capabilities = {}
+          capabilities[:sampling] = sampling_capabilities if sampling_enabled?
+          capabilities[:elicitation] = elicitation_capabilities if elicitation_enabled?
+
+          extensions = build_client_extensions_capabilities(protocol_version: protocol_version)
+          capabilities[:extensions] = extensions unless extensions.empty?
+          capabilities
+        end
+
+        def supports_extension_negotiation?
+          true
+        end
+
+        def extension_mode
+          :full
+        end
+
+        def build_client_extensions_capabilities(protocol_version:)
+          return {} unless Native::Protocol.extensions_supported?(protocol_version)
+
+          Extensions::Registry.normalize_map(@config[:extensions]).transform_values { |value| value || {} }
+        end
+
+        def cache_hints
+          @cache_hints.transform_values(&:dup).freeze
+        end
+
+        # Existing handler-class factories refer to adapter.native_client as
+        # their response coordinator. During an SDK server request this is the
+        # bridge for that request, never a RubyLLM native protocol client.
+        def native_client
+          Thread.current[:ruby_llm_mcp_sdk_bridge] || self
+        end
+
+        def tool_list(cursor: nil)
+          paginated_list(:tools, cursor: cursor)
         end
 
         def execute_tool(name:, parameters:)
           ensure_started
-          tool = find_tool(name)
-          result = @mcp_client.call_tool(tool: tool, arguments: parameters)
-          transform_tool_result(result)
-        rescue RubyLLM::MCP::Errors::TimeoutError => e
-          native_transport = @mcp_client&.transport&.native_transport
-          if native_transport&.alive? && !e.request_id.nil?
-            cancelled_notification(reason: "Request timed out", request_id: e.request_id)
-          end
-          raise e
+          response = with_sdk_errors { @mcp_client.call_tool(name: name, arguments: parameters) }
+          Result.new(response)
         end
 
-        def resource_list(cursor: nil) # rubocop:disable Lint/UnusedMethodArgument
-          ensure_started
-          @mcp_client.resources.map { |resource| transform_resource(resource) }
+        def resource_list(cursor: nil)
+          paginated_list(:resources, cursor: cursor)
         end
 
         def resource_read(uri:)
           ensure_started
-          result = @mcp_client.read_resource(uri: uri)
-          transform_resource_content(result)
+          response = sdk_request(method: "resources/read", params: { uri: uri })
+          Result.new(response)
         end
 
-        def prompt_list(cursor: nil) # rubocop:disable Lint/UnusedMethodArgument
-          ensure_started
-          @mcp_client.prompts.map { |prompt| transform_prompt(prompt) }
+        def prompt_list(cursor: nil)
+          paginated_list(:prompts, cursor: cursor)
         end
 
         def execute_prompt(name:, arguments:)
           ensure_started
-          response = @mcp_client.transport.send_request(
-            request: {
-              jsonrpc: "2.0",
-              id: SecureRandom.uuid,
-              method: "prompts/get",
-              params: {
-                name: name,
-                arguments: arguments
-              }
-            }
+          response = sdk_request(
+            method: "prompts/get",
+            params: { name: name, arguments: arguments }
           )
-
-          transform_prompt_result(response)
+          Result.new(response)
         end
 
-        def resource_template_list(cursor: nil) # rubocop:disable Lint/UnusedMethodArgument
-          ensure_started
-          @mcp_client.resource_templates.map { |resource_template| transform_resource_template(resource_template) }
+        def resource_template_list(cursor: nil)
+          paginated_list(:resource_templates, cursor: cursor)
         end
 
-        def set_logging(level:)
-          ensure_started
-          @mcp_client.transport.send_request(
-            request: {
-              jsonrpc: "2.0",
-              id: SecureRandom.uuid,
-              method: "logging/setLevel",
-              params: { level: level }
-            }
-          )
+        def completion_resource(uri:, argument:, value:, context: nil)
+          complete(ref: { type: "ref/resource", uri: uri }, argument: argument, value: value, context: context)
         end
 
-        def cancelled_notification(reason:, request_id:)
-          return unless @mcp_client&.transport.respond_to?(:native_transport)
-
-          native_transport = @mcp_client.transport.native_transport
-          return unless native_transport
-
-          body = RubyLLM::MCP::Native::Messages::Notifications.cancelled(
-            request_id: request_id,
-            reason: reason
-          )
-          native_transport.request(body, wait_for_response: false)
+        def completion_prompt(name:, argument:, value:, context: nil)
+          complete(ref: { type: "ref/prompt", name: name }, argument: argument, value: value, context: context)
         end
 
-        # These methods remain as NotImplementedError from base class:
-        # - completion_resource
-        # - completion_prompt
-        # - resources_subscribe
-        # - initialize_notification
-        # - roots_list_change_notification
-        # - ping_response
-        # - roots_list_response
-        # - sampling_create_message_response
-        # - error_response
-        # - elicitation_response
-        # - register_resource
+        def set_elicitation_enabled(enabled:)
+          @elicitation_enabled = enabled
+        end
+
+        def register_resource(resource)
+          client.linked_resources << resource
+        end
 
         private
 
         def ensure_started
-          start unless @mcp_client
+          start unless alive?
         end
 
         def require_mcp_gem!
           require "mcp"
-          if Gem::Version.new(::MCP::VERSION) < Gem::Version.new("0.7.0")
-            raise Errors::AdapterConfigurationError.new(message: <<~MSG)
-              The official MCP SDK version 0.7 or higher is required to use the :mcp_sdk adapter.
-            MSG
-          end
-        rescue LoadError
+          return if SDK_REQUIREMENT.satisfied_by?(Gem::Version.new(::MCP::VERSION))
+
+          raise Errors::AdapterConfigurationError.new(
+            message: "The :mcp_sdk adapter requires mcp #{SDK_REQUIREMENT}; found #{::MCP::VERSION}."
+          )
+        rescue LoadError => e
+          raise e unless e.path == "mcp"
+
           raise LoadError, <<~MSG
             The official MCP SDK is required to use the :mcp_sdk adapter.
 
             Add to your Gemfile:
-              gem 'mcp', '~> 0.7'
+              gem "mcp", "~> 0.25"
 
-            Then run: bundle install
+            For HTTP also add:
+              gem "faraday", ">= 2"
+              gem "event_stream_parser", ">= 1"
           MSG
         end
 
-        def build_transport # rubocop:disable Metrics/MethodLength
-          protocol_version = @config[:protocol_version] || RubyLLM::MCP.config.protocol_version
-          notification_callback = lambda do |notification|
-            @notification_handler.execute(notification)
-          end
-
+        def build_transport
           case @transport_type
-          when :http
-            # MCP::Client::HTTP is for simple JSON-only HTTP servers
-            # Use :streamable for servers that support the streamable HTTP/SSE protocol
-            ::MCP::Client::HTTP.new(
-              url: @config[:url],
-              headers: @config[:headers] || {}
-            )
           when :stdio
-            MCPTransports::Stdio.new(
-              command: @config[:command],
-              args: @config[:args] || [],
-              env: @config[:env] || {},
-              request_timeout: @config[:request_timeout] || 10_000,
-              protocol_version: protocol_version,
-              notification_callback: notification_callback
-            )
-          when :sse
-            MCPTransports::SSE.new(
-              url: @config[:url],
-              headers: @config[:headers] || {},
-              version: @config[:version] || :http2,
-              request_timeout: @config[:request_timeout] || 10_000,
-              protocol_version: protocol_version,
-              notification_callback: notification_callback
-            )
-          when :streamable, :streamable_http
-            config_copy = @config.dup
-            oauth_provider = Auth::TransportOauthHelper.create_oauth_provider(config_copy) if Auth::TransportOauthHelper.oauth_config_present?(config_copy)
-
-            MCPTransports::StreamableHTTP.new(
-              url: @config[:url],
-              headers: @config[:headers] || {},
-              version: @config[:version] || :http2,
-              request_timeout: @config[:request_timeout] || 10_000,
-              reconnection: @config[:reconnection] || {},
-              oauth_provider: oauth_provider,
-              rate_limit: @config[:rate_limit],
-              session_id: @config[:session_id],
-              protocol_version: protocol_version,
-              notification_callback: notification_callback
-            )
+            build_stdio_transport
+          when *HTTP_TRANSPORTS
+            build_http_transport
           end
         end
 
-        def find_tool(name)
-          @mcp_client.tools.find { |t| t.name == name } ||
-            raise(Errors::ResponseError.new(
-                    message: "Tool '#{name}' not found",
-                    error: { "code" => -32_602, "message" => "Tool not found" }
-                  ))
+        def build_stdio_transport
+          options = {
+            command: config_value(:command),
+            args: config_value(:args) || [],
+            env: config_value(:env),
+            read_timeout: request_timeout_seconds
+          }
+          max_line_bytes = config_value(:max_line_bytes)
+          options[:max_line_bytes] = max_line_bytes if max_line_bytes
+          ::MCP::Client::Stdio.new(**options)
         end
 
-        # Transform methods to normalize official SDK objects
+        def build_http_transport
+          options = {
+            url: config_value(:url),
+            headers: config_value(:headers) || {},
+            oauth: sdk_oauth_provider
+          }
+          max_message_bytes = config_value(:max_message_bytes)
+          options[:max_message_bytes] = max_message_bytes if max_message_bytes
+          customizer = config_value(:faraday)
+
+          ::MCP::Client::HTTP.new(**options) do |connection|
+            connection.options.timeout = request_timeout_seconds
+            connection.options.open_timeout = request_timeout_seconds
+            customizer&.call(connection)
+          end
+        rescue LoadError => e
+          raise LoadError,
+                "#{e.message}\nFor mcp_sdk HTTP add faraday >= 2 and event_stream_parser >= 1 to your Gemfile."
+        end
+
+        def sdk_oauth_provider
+          oauth = config_value(:oauth)
+          provider = oauth.is_a?(Hash) ? (oauth[:provider] || oauth["provider"]) : oauth
+          return if provider.nil?
+
+          if defined?(Auth::OAuthProvider) && provider.is_a?(Auth::OAuthProvider)
+            raise Errors::AdapterConfigurationError.new(
+              message: "RubyLLM::MCP native OAuth providers cannot be used with :mcp_sdk. " \
+                       "Pass an MCP::Client::OAuth provider via config: { oauth: provider }."
+            )
+          end
+
+          provider
+        end
+
+        def register_server_request_handlers
+          return unless HTTP_TRANSPORTS.include?(@transport_type)
+
+          @mcp_client.on_sampling { |params| handle_sampling_request(params) } if sampling_enabled?
+          @mcp_client.on_elicitation { |params| handle_elicitation_request(params) } if elicitation_enabled?
+        end
+
+        def handle_sampling_request(params)
+          bridge = ServerRequestBridge.new(client, timeout: request_timeout_seconds)
+          result = Result.new({ "id" => SecureRandom.uuid, "method" => "sampling/createMessage", "params" => params })
+          bridge.with_current { Sample.new(result, bridge).execute }
+          bridge.response!(wait: false)
+        end
+
+        def handle_elicitation_request(params)
+          bridge = ServerRequestBridge.new(client, timeout: server_request_timeout_seconds)
+          result = Result.new({ "id" => SecureRandom.uuid, "method" => "elicitation/create", "params" => params })
+          elicitation = Elicitation.new(bridge, result)
+          bridge.with_current { elicitation.execute }
+          bridge.response!(wait: true, timeout_response: { "action" => "cancel" }) do
+            elicitation.timeout!
+            Handlers::ElicitationRegistry.remove(elicitation.id)
+          end
+        end
+
+        def sampling_enabled?
+          supports?(:sampling) && MCP.config.sampling.enabled?
+        end
+
+        def elicitation_enabled?
+          supports?(:elicitation) && @elicitation_enabled
+        end
+
+        def sampling_capabilities
+          value = {}
+          value[:tools] = {} if MCP.config.sampling.tools
+          value[:context] = {} if MCP.config.sampling.context
+          value
+        end
+
+        def elicitation_capabilities
+          value = {}
+          value[:form] = {} if MCP.config.elicitation.form
+          value[:url] = {} if MCP.config.elicitation.url
+          value
+        end
+
+        def complete(ref:, argument:, value:, context:)
+          ensure_started
+          completion = with_sdk_errors do
+            @mcp_client.complete(
+              ref: ref,
+              argument: { name: argument, value: value },
+              context: context
+            )
+          end
+          Result.new({ "result" => { "completion" => completion } })
+        end
+
+        def paginated_list(collection, cursor: nil)
+          ensure_started
+          method, result_key = COLLECTION_METHODS.fetch(collection)
+          items = []
+          pages = []
+          seen = {}
+
+          loop do
+            response = sdk_request(method: method, params: cursor ? { cursor: cursor } : nil)
+            result = response.fetch("result", {})
+            items.concat(result[result_key] || [])
+            pages << result
+            next_cursor = result["nextCursor"]
+            break if next_cursor.nil? || seen[next_cursor]
+
+            seen[next_cursor] = true
+            cursor = next_cursor
+          end
+
+          store_cache_hint(collection, pages)
+          items
+        end
+
+        def store_cache_hint(collection, pages)
+          ttls = pages.filter_map { |page| page["ttlMs"] }
+          scopes = pages.filter_map { |page| page["cacheScope"] }
+          @cache_hints[collection] = {
+            ttl_ms: ttls.min,
+            cache_scope: scopes.include?("private") ? "private" : scopes.first
+          }.compact.freeze
+        end
+
+        def sdk_request(method:, params: nil)
+          request = {
+            jsonrpc: "2.0",
+            id: SecureRandom.uuid,
+            method: method
+          }
+          request[:params] = params if params
+
+          response = with_sdk_errors { @mcp_client.transport.send_request(request: request) }
+          if response.is_a?(Hash) && response["error"]
+            error = response["error"]
+            raise Errors::ResponseError.new(
+              message: "Response error: #{error['message']}",
+              error: error
+            )
+          end
+          response
+        end
+
+        def with_sdk_errors
+          yield
+        rescue ::MCP::Client::ServerError => e
+          raise Errors::ResponseError.new(
+            message: "Response error: #{e.message}",
+            error: { "code" => e.code, "message" => e.message, "data" => e.data }.compact
+          )
+        rescue ::MCP::Client::SessionExpiredError => e
+          message = "MCP session expired; call restart! before retrying: #{e.message}"
+          raise Errors::SessionExpiredError.new(message: message)
+        rescue ::MCP::CancelledError => e
+          raise Errors::RequestCancelled.new(message: e.message, request_id: e.request_id)
+        rescue ::MCP::Client::InputRequiredError => e
+          message = "The server requested multi-round-trip input, which is not supported " \
+                    "on the stable 2025-11-25 integration: #{e.message}"
+          raise Errors::UnsupportedFeature.new(
+            message: message
+          )
+        rescue ::MCP::Client::RequestHandlerError, ::MCP::Client::ValidationError => e
+          raise Errors::TransportError.new(message: e.message, error: e)
+        end
+
+        def protocol_version
+          config_value(:protocol_version) || MCP.config.protocol_version
+        end
+
+        def request_timeout_seconds
+          (config_value(:request_timeout) || 10_000).to_f / 1000
+        end
+
+        # Leave enough time for the SDK to serialize and send the server-request
+        # response before the enclosing HTTP request reaches its own deadline.
+        def server_request_timeout_seconds
+          request_timeout_seconds * 0.8
+        end
+
+        def config_value(key)
+          @config[key] || @config[key.to_s]
+        end
+
+        # Kept for compatibility with callers that normalized SDK model objects
+        # through the adapter before 0.25. The 0.25 list path now preserves the
+        # original wire hashes directly.
         def transform_tool(tool)
+          return tool if tool.is_a?(Hash)
+
           {
             "name" => tool.name,
             "description" => tool.description,
             "inputSchema" => tool.input_schema,
             "outputSchema" => tool.output_schema,
-            "_meta" => extract_tool_meta(tool)
+            "_meta" => tool.respond_to?(:meta) ? tool.meta : tool["_meta"]
           }.compact
         end
 
         def transform_resource(resource)
-          {
-            "name" => resource["name"],
-            "uri" => resource["uri"],
-            "title" => resource["title"],
-            "description" => resource["description"],
-            "mimeType" => resource["mimeType"],
-            "annotations" => resource["annotations"],
-            "icons" => resource["icons"],
-            "_meta" => resource["_meta"]
-          }.compact
+          resource
         end
 
         def transform_prompt(prompt)
-          {
-            "name" => prompt["name"],
-            "title" => prompt["title"],
-            "description" => prompt["description"],
-            "arguments" => prompt["arguments"]
-          }.compact
+          prompt
         end
 
         def transform_resource_template(resource_template)
-          {
-            "name" => resource_template["name"],
-            "uriTemplate" => resource_template["uriTemplate"],
-            "title" => resource_template["title"],
-            "description" => resource_template["description"],
-            "mimeType" => resource_template["mimeType"],
-            "annotations" => resource_template["annotations"],
-            "icons" => resource_template["icons"],
-            "_meta" => resource_template["_meta"]
-          }.compact
+          resource_template
         end
 
-        def transform_tool_result(result)
-          # The MCP gem returns the full JSON-RPC response
-          # Extract the content from result["result"]["content"]
-          content = if result.is_a?(Hash) && result["result"] && result["result"]["content"]
-                      result["result"]["content"]
-                    elsif result.is_a?(Array)
-                      result.map { |item| transform_content_item(item) }
-                    else
-                      [{ "type" => "text", "text" => result.to_s }]
-                    end
-
-          is_error = if result.is_a?(Hash) && result["result"]
-                       result["result"]["isError"]
-                     end
-
-          result_data = { "content" => content }
-          result_data["isError"] = is_error unless is_error.nil?
-
-          Result.new({
-                       "result" => result_data
-                     })
-        end
-
-        def transform_content_item(item)
-          case item
-          when String
-            { "type" => "text", "text" => item }
-          when Hash
-            item
-          else
-            { "type" => "text", "text" => item.to_s }
+        # Captures responses emitted by the existing Sample/Elicitation objects so
+        # they can satisfy the official SDK's synchronous server-request contract.
+        class ServerRequestBridge
+          def initialize(client, timeout:)
+            @client = client
+            @timeout = timeout
+            @mutex = Mutex.new
+            @condition = ConditionVariable.new
+            @response = nil
+            @error = nil
           end
-        end
 
-        def transform_resource_content(result)
-          contents = if result.is_a?(Array)
-                       result.map { |r| transform_single_resource_content(r) }
-                     else
-                       [transform_single_resource_content(result)]
-                     end
-
-          Result.new({
-                       "result" => {
-                         "contents" => contents
-                       }
-                     })
-        end
-
-        def transform_single_resource_content(result)
-          {
-            "uri" => result["uri"],
-            "mimeType" => result["mimeType"],
-            "text" => result["text"],
-            "blob" => result["blob"]
-          }
-        end
-
-        def transform_prompt_result(result)
-          if result.is_a?(Hash) && (result.key?("result") || result.key?("error"))
-            Result.new(result)
-          else
-            Result.new({
-                         "result" => result || {}
-                       })
+          def with_current
+            previous = Thread.current[:ruby_llm_mcp_sdk_bridge]
+            Thread.current[:ruby_llm_mcp_sdk_bridge] = self
+            yield
+          ensure
+            Thread.current[:ruby_llm_mcp_sdk_bridge] = previous
           end
-        end
 
-        def configured_extensions?
-          !Extensions::Registry.normalize_map(@config[:extensions]).empty?
-        end
+          def sampling_callback
+            @client.on[:sampling]
+          end
 
-        def warn_passive_extension_support!
-          self.class.warn_passive_extension_support_once
-        end
+          def sampling_callback_enabled?
+            @client.sampling_callback_enabled?
+          end
 
-        def extract_tool_meta(tool)
-          return tool["_meta"] if tool.respond_to?(:[]) && tool["_meta"]
-          return tool.meta if tool.respond_to?(:meta)
-          return tool.instance_variable_get(:@meta) if tool.instance_variable_defined?(:@meta)
+          def elicitation_callback
+            @client.on[:elicitation]
+          end
 
-          nil
-        end
+          def register_in_flight_request(*)
+            nil
+          end
 
-        class << self
-          def warn_passive_extension_support_once
-            @extensions_warning_mutex ||= Mutex.new
+          def unregister_in_flight_request(*)
+            nil
+          end
 
-            @extensions_warning_mutex.synchronize do
-              return if @extensions_warning_emitted
+          def sampling_create_message_response(id:, model:, message:, **_options)
+            response = Native::Messages::Responses.sampling_create_message(id: id, model: model, message: message)
+            resolve(response[:result])
+          end
 
-              RubyLLM::MCP.logger.warn(
-                "MCP SDK adapter extension configuration is passive: extensions are accepted but not advertised."
-              )
-              @extensions_warning_emitted = true
+          def elicitation_response(id:, elicitation:)
+            normalized = elicitation.transform_keys(&:to_sym)
+            response = Native::Messages::Responses.elicitation(id: id, **normalized)
+            resolve(response[:result])
+          end
+
+          def error_response(id:, message:, code: -1) # rubocop:disable Lint/UnusedMethodArgument
+            @mutex.synchronize do
+              @error ||= [message, code]
+              @condition.broadcast
+            end
+          end
+
+          def response!(wait:, timeout_response: nil)
+            await_response if wait
+            response, error = @mutex.synchronize { [@response, @error] }
+            if error
+              raise ::MCP::Client::ServerRequestError.new(error.first, code: error.last)
+            end
+            return response if response
+
+            if wait && timeout_response
+              yield if block_given?
+              return timeout_response
+            end
+
+            raise ::MCP::Client::ServerRequestError.new("Client handler did not produce a response", code: -1)
+          end
+
+          private
+
+          def resolve(response)
+            @mutex.synchronize do
+              @response = stringify_keys(response)
+              @condition.broadcast
+            end
+          end
+
+          def await_response
+            deadline = Process.clock_gettime(Process::CLOCK_MONOTONIC) + @timeout
+            @mutex.synchronize do
+              until @response || @error
+                remaining = deadline - Process.clock_gettime(Process::CLOCK_MONOTONIC)
+                break if remaining <= 0
+
+                @condition.wait(@mutex, remaining)
+              end
+            end
+          end
+
+          def stringify_keys(value)
+            case value
+            when Hash
+              value.to_h { |key, item| [key.to_s, stringify_keys(item)] }
+            when Array
+              value.map { |item| stringify_keys(item) }
+            else
+              value
             end
           end
         end

@@ -3,14 +3,22 @@
 module RubyLLM
   module MCP
     class Resource
-      attr_reader :uri, :name, :description, :mime_type, :adapter, :subscribed, :apps_metadata
+      attr_reader :uri, :name, :title, :description, :mime_type, :adapter, :subscribed, :apps_metadata,
+                  :annotations, :icons, :size, :meta, :cache_hint
 
       def initialize(adapter, resource)
         @adapter = adapter
         @uri = resource["uri"]
         @name = resource["name"]
+        @title = resource["title"]
         @description = resource["description"]
         @mime_type = resource["mimeType"]
+        @annotations = resource["annotations"]
+        @icons = resource["icons"] || []
+        @size = resource["size"]
+        @meta = resource["_meta"] || {}
+        @cache_hint = nil
+        @content_expires_at = nil
         @apps_metadata = Extensions::Apps::ResourceMetadata.new(resource[Extensions::Apps::Constants::META_KEY])
         if resource.key?("content_response")
           @content_response = resource["content_response"]
@@ -21,6 +29,7 @@ module RubyLLM
       end
 
       def content
+        reset_content! if content_cache_expired?
         return @content unless @content.nil?
 
         result = read_response
@@ -28,6 +37,8 @@ module RubyLLM
 
         @content_response = result.value.dig("contents", 0)
         @content = @content_response["text"] || @content_response["blob"]
+        apply_cache_hint(result.value)
+        @content
       end
 
       def content_loaded?
@@ -57,6 +68,7 @@ module RubyLLM
       def reset_content!
         @content = nil
         @content_response = nil
+        @content_expires_at = nil
       end
 
       def include(chat, **args)
@@ -93,6 +105,19 @@ module RubyLLM
       alias to_json to_h
 
       private
+
+      def apply_cache_hint(value)
+        ttl_ms = value["ttlMs"]
+        cache_scope = value["cacheScope"]
+        @cache_hint = { ttl_ms: ttl_ms, cache_scope: cache_scope }.compact.freeze
+        return if ttl_ms.nil?
+
+        @content_expires_at = Process.clock_gettime(Process::CLOCK_MONOTONIC) + (ttl_ms.to_f / 1000)
+      end
+
+      def content_cache_expired?
+        @content_expires_at && Process.clock_gettime(Process::CLOCK_MONOTONIC) >= @content_expires_at
+      end
 
       def content_type
         return "text" if @content_response.nil?

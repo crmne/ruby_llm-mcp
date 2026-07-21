@@ -21,4 +21,5 @@ This section contains advanced implementation guidance.
 
 ## Upgrading
 
+- **[Official MCP SDK 0.25]({% link guides/mcp-sdk-0.25.md %})** - SDK transports, OAuth, sampling, elicitation, advanced access, and migration from SDK 0.7
 - **[Upgrading]({% link guides/upgrading.md %})** - Unified migration guide with sections for updates to 1.0, 0.8, and 0.7

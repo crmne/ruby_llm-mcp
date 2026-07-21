@@ -11,6 +11,8 @@ description: "MCP elicitation - allow servers to request additional structured i
 
 Elicitation allows MCP servers to request additional structured information from users during interactions. This enables dynamic workflows where servers can ask for clarification, gather additional context, or collect user preferences in real-time.
 
+Elicitation is available through the native adapter's supported transports and through `:mcp_sdk` Streamable HTTP. Official SDK stdio does not expose server-request handlers in version 0.25.
+
 ## Table of contents
 {: .no_toc .text-delta }
 

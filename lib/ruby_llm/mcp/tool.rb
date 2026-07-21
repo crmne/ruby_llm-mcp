@@ -26,7 +26,7 @@ module RubyLLM
 
     class Tool < RubyLLM::Tool
       attr_reader :name, :title, :description, :adapter, :annotations, :tool_response, :with_prefix, :output_schema,
-                  :apps_metadata
+                  :apps_metadata, :icons, :meta
 
       def initialize(adapter, tool_response, with_prefix: false)
         super()
@@ -35,7 +35,10 @@ module RubyLLM
         @with_prefix = with_prefix
         @name = format_name(tool_response["name"])
         @mcp_name = tool_response["name"]
+        @title = tool_response["title"]
         @description = tool_response["description"].to_s
+        @icons = tool_response["icons"] || []
+        @meta = tool_response["_meta"] || {}
 
         @input_schema = tool_response["inputSchema"]
         @output_schema = tool_response["outputSchema"]

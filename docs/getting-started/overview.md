@@ -54,7 +54,7 @@ The same client API can then be extended with resources, prompts, notifications,
 
 1. **RubyLLM Chat** - Your application chat/session logic
 2. **RubyLLM MCP Client** - Connection and protocol wrapper
-3. **Adapter** - `:ruby_llm` (full) or `:mcp_sdk` (core/passive extensions)
+3. **Adapter** - `:ruby_llm` (native implementation/transports) or `:mcp_sdk` (official SDK 0.25/transports)
 4. **Transport** - `stdio`, `streamable`, `sse`
 5. **MCP Server** - External capability provider
 
@@ -81,9 +81,9 @@ Use synchronous responses for short operations, notifications for real-time stat
 RubyLLM MCP supports two adapters:
 
 - **Native (`:ruby_llm`)** - Full-featured implementation with advanced MCP capabilities (sampling, roots, notifications, progress, tasks, elicitation).
-- **MCP SDK (`:mcp_sdk`)** - Official SDK-backed adapter focused on core surfaces (tools, resources, prompts, templates, logging).
+- **MCP SDK (`:mcp_sdk`)** - Official SDK 0.25 adapter with tools, resources, prompts, templates, completions, pagination, structured output, extension negotiation, and HTTP sampling/elicitation/OAuth.
 
-Choose `:ruby_llm` when you need full protocol coverage and advanced interactions. Choose `:mcp_sdk` when you only need core MCP surfaces and want SDK alignment.
+Choose `:ruby_llm` for the project's established transports and full notification-oriented feature set. Choose `:mcp_sdk` when you want the official SDK lifecycle, stdio/Streamable HTTP transports, OAuth providers, and low-level SDK access.
 
 For the full feature matrix, see **[Adapters & Transports]({% link guides/adapters.md %})**.
 

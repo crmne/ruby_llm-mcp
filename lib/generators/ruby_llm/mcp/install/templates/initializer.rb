@@ -4,7 +4,7 @@
 RubyLLM::MCP.configure do |config|
   # Default SDK adapter to use (:ruby_llm or :mcp_sdk)
   # - :ruby_llm: Full-featured, supports all MCP features + extensions
-  # - :mcp_sdk: Official SDK, limited features but maintained by Anthropic
+  # - :mcp_sdk: Official Model Context Protocol SDK and transports
   config.default_adapter = :ruby_llm
 
   # Request timeout in milliseconds

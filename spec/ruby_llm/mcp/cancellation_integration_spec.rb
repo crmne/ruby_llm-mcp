@@ -26,7 +26,7 @@ RSpec.describe "Cancellation Integration", :vcr do # rubocop:disable RSpec/Descr
     end
   end
 
-  each_client_supporting(:sampling) do |config|
+  each_client(adapter: :native) do |config|
     describe "End-to-end cancellation with #{config[:name]}" do
       let(:client) { RubyLLM::MCP::Client.new(**config[:options], request_timeout: 30_000, start: false) }
 

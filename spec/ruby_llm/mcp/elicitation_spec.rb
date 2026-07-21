@@ -83,7 +83,9 @@ RSpec.describe RubyLLM::MCP::Elicitation do
     end
 
     # Integration tests - only run on adapters that support elicitation
-    each_client_supporting(:elicitation) do
+    # The official SDK HTTP listener is covered separately without WebMock;
+    # its Net::HTTP streaming connection cannot run through WebMock safely.
+    each_client(adapter: :native) do
       before do
         # Configure elicitation handler for this test
         client.on_elicitation(&elicitation_handler)

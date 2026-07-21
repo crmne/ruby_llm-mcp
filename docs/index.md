@@ -19,7 +19,7 @@ permalink: /
 RubyLLM::MCP gives you a direct way to use [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) servers from [RubyLLM](https://github.com/crmne/ruby_llm).
 {: .fs-6 .fw-300 }
 
-**Protocol support:** Fully supports MCP spec `2025-06-18` (stable), with draft spec `2026-01-26` available.
+**Protocol support:** Fully supports MCP spec `2025-11-25` (stable), with draft spec `2026-01-26` available.
 
 <a href="{% link getting-started/getting-started.md %}" class="btn btn-primary fs-5 mb-4 mb-md-0 mr-2" style="margin: 0;">Get started</a>
 <a href="https://github.com/patvice/ruby_llm-mcp" class="btn fs-5 mb-4 mb-md-0 mr-2" style="margin: 0;">GitHub</a>
@@ -38,7 +38,7 @@ MCP integration in Ruby apps should be easy to reason about.
 RubyLLM::MCP focuses on:
 
 - Ruby-first APIs for using MCP tools, resources, and prompts in RubyLLM chat workflows
-- Stable protocol defaults (`2025-06-18`) with explicit draft opt-in (`2026-01-26`)
+- Stable protocol defaults (`2025-11-25`) with explicit draft opt-in (`2026-01-26`)
 - Built-in notification and response handlers for real-time and interactive workflows
 - MCP OAuth 2.1 authentication support (PKCE, dynamic registration, discovery, and automatic token refresh)
 - OAuth setup paths for Rails apps (per-user connections) and browser-based CLI flows
@@ -168,7 +168,7 @@ gem "ruby_llm-mcp"
 Optional official SDK adapter:
 
 ```ruby
-gem "mcp", "~> 0.7"
+gem "mcp", "~> 0.25"
 ```
 
 ## Rails

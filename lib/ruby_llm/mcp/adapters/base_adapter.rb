@@ -13,8 +13,21 @@ module RubyLLM
             features.each { |f| supported_features[f] = true }
           end
 
-          def support?(feature)
-            supported_features[feature] || false
+          def transport_features
+            @transport_features ||= Hash.new { |hash, key| hash[key] = {} }
+          end
+
+          def supports_on(*transports, features:)
+            transports.each do |transport|
+              Array(features).each { |feature| transport_features[transport.to_sym][feature] = true }
+            end
+          end
+
+          def support?(feature, transport: nil)
+            return true if supported_features[feature]
+            return false if transport.nil?
+
+            transport_features[transport.to_sym][feature] || false
           end
 
           def supported_transports
@@ -39,7 +52,11 @@ module RubyLLM
         end
 
         def supports?(feature)
-          self.class.support?(feature)
+          self.class.support?(feature, transport: @transport_type)
+        end
+
+        def cache_hints
+          {}
         end
 
         def supports_extension_negotiation?

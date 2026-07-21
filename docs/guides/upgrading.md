@@ -11,6 +11,20 @@ description: "Unified upgrade guide with version-specific migration sections"
 
 This page consolidates upgrade guidance across supported RubyLLM MCP version jumps.
 
+## Upgrade the optional MCP SDK adapter to 0.25
+
+The native `:ruby_llm` adapter does not change. If you use `adapter: :mcp_sdk`, update the optional dependency and migrate that adapter to the official 0.25 transports:
+
+```ruby
+gem "mcp", "~> 0.25"
+gem "faraday", ">= 2"                # SDK HTTP only
+gem "event_stream_parser", ">= 1"    # SDK HTTP only
+```
+
+SDK stdio now uses `MCP::Client::Stdio`; SDK `:http`, `:streamable`, and `:streamable_http` use `MCP::Client::HTTP`. SDK legacy SSE is no longer accepted—keep it on `adapter: :ruby_llm` or migrate the endpoint to Streamable HTTP.
+
+SDK OAuth clients must pass an official `MCP::Client::OAuth` provider. Logging/progress callbacks and native transport options remain native-only. See [Official MCP SDK 0.25]({% link guides/mcp-sdk-0.25.md %}) for the complete migration and feature guide.
+
 ## Table of contents
 {: .no_toc .text-delta }
 
@@ -37,7 +51,7 @@ gem 'ruby_llm-mcp', '~> 1.0'
 Optional for MCP SDK adapter (Ruby 3.1+):
 
 ```ruby
-gem 'mcp', '~> 0.7'
+gem 'mcp', '~> 0.25'
 ```
 
 2. Run:
