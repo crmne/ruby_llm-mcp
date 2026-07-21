@@ -2207,6 +2207,28 @@ RSpec.describe RubyLLM::MCP::Native::Transports::StreamableHTTP do
           /no OAuth provider configured/
         )
       end
+
+      it "delivers a POST 405 response to the pending request instead of timing out" do
+        short_timeout_transport = described_class.new(
+          url: TestServerManager::HTTP_SERVER_URL,
+          request_timeout: 100,
+          coordinator: mock_coordinator,
+          options: { headers: {} }
+        )
+
+        stub_request(:post, TestServerManager::HTTP_SERVER_URL)
+          .to_return(status: 405, body: "Method Not Allowed")
+
+        expect do
+          short_timeout_transport.request({ "method" => "tools/list", "id" => "post-405" })
+        end.to raise_error(RubyLLM::MCP::Errors::TransportError) { |error|
+          expect(error.code).to eq(405)
+          expect(error.message).to match(/405/)
+        }
+
+        pending_requests = short_timeout_transport.instance_variable_get(:@pending_requests)
+        expect(pending_requests).not_to have_key("post-405")
+      end
     end
   end
 

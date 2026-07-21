@@ -406,6 +406,7 @@ module RubyLLM
               handle_authorization_challenge(response, request_id, original_message)
             when 405
               # Method not allowed - acceptable for some endpoints
+              fail_pending_request(request_id, response) if request_id
               nil
             when 400...500
               handle_client_error(response)
@@ -415,6 +416,19 @@ module RubyLLM
                 code: response.status,
                 message: "HTTP request failed: #{response.status} - #{response_body}"
               )
+            end
+          end
+
+          def fail_pending_request(request_id, response)
+            response_body = response.respond_to?(:body) ? response.body.to_s : "Unknown error"
+            error = Errors::TransportError.new(
+              code: response.status,
+              message: "HTTP request failed: #{response.status} - #{response_body}"
+            )
+
+            @pending_mutex.synchronize do
+              queue = @pending_requests.delete(request_id.to_s)
+              queue&.push(error)
             end
           end
 
