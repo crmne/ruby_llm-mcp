@@ -183,6 +183,35 @@ RSpec.describe RubyLLM::MCP do
         expect(client_streamable_http).to have_received(:stop)
         expect(client_stdio).to have_received(:stop)
       end
+
+      it "starts and stops only selected clients" do
+        RubyLLM::MCP.establish_connection(client_names: ["stdio"]) { |_clients| "test" }
+
+        expect(client_stdio).to have_received(:start)
+        expect(client_stdio).to have_received(:stop)
+        expect(client_streamable_http).not_to have_received(:start)
+        expect(client_streamable_http).not_to have_received(:stop)
+      end
+
+      it "keeps a shared client alive until the outer connection scope exits" do
+        RubyLLM::MCP.establish_connection(client_names: ["stdio"]) do
+          RubyLLM::MCP.establish_connection(client_names: ["stdio"]) { |_clients| "nested" }
+
+          expect(client_stdio).not_to have_received(:stop)
+        end
+
+        expect(client_stdio).to have_received(:stop).once
+      end
+
+      it "releases earlier clients when a later client fails to start" do
+        allow(client_stdio).to receive(:start).and_raise("start failed")
+
+        expect do
+          RubyLLM::MCP.establish_connection { |_clients| "test" }
+        end.to raise_error("start failed")
+
+        expect(client_streamable_http).to have_received(:stop)
+      end
     end
   end
 
@@ -289,6 +318,16 @@ RSpec.describe RubyLLM::MCP do
           toolset.include_tools("read_file")
         end
       end.to raise_error(ArgumentError, /Provide either configuration options or a block, not both/)
+
+      expect(RubyLLM::MCP.toolsets).not_to have_key(:support)
+    end
+
+    it "rejects unknown options before exposing an unfiltered toolset" do
+      expect do
+        RubyLLM::MCP.toolset(:support, exclude_tool: ["delete_file"])
+      end.to raise_error(ArgumentError, /Unknown toolset option: exclude_tool/)
+
+      expect(RubyLLM::MCP.toolsets).not_to have_key(:support)
     end
 
     it "supports string keys and alias option names" do

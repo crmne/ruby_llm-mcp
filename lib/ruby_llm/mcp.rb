@@ -31,6 +31,7 @@ module RubyLLM
       include_tools: %i[include_tools include],
       exclude_tools: %i[exclude_tools exclude]
     }.freeze
+    TOOLSET_OPTION_KEYS = TOOLSET_OPTION_MAPPINGS.values.flatten.freeze
 
     def clients(config = RubyLLM::MCP.config.mcp_configuration)
       if @clients.nil?
@@ -49,6 +50,7 @@ module RubyLLM
     def remove_client(name)
       client = clients.delete(name)
       client&.stop
+      connection_mutex.synchronize { connection_leases.delete(name.to_s) }
       client
     end
 
@@ -56,22 +58,28 @@ module RubyLLM
       Client.new(...)
     end
 
-    def establish_connection(&)
-      clients.each_value(&:start)
-      if block_given?
-        begin
-          yield clients
-        ensure
-          close_connection
-        end
-      else
-        clients
+    def establish_connection(client_names: nil)
+      selected_clients = select_clients(client_names)
+
+      unless block_given?
+        selected_clients.each_value(&:start)
+        return selected_clients
+      end
+
+      acquire_connections(selected_clients)
+      begin
+        yield selected_clients
+      ensure
+        release_connections(selected_clients)
       end
     end
 
     def close_connection
-      clients.each_value do |client|
-        client.stop if client.alive?
+      connection_mutex.synchronize do
+        clients.each_value do |client|
+          client.stop if client.alive?
+        end
+        connection_leases.clear
       end
     end
 
@@ -85,22 +93,23 @@ module RubyLLM
     end
 
     def toolset(name, options = nil)
+      if block_given? && !options.nil?
+        raise ArgumentError, "Provide either configuration options or a block, not both"
+      end
+
+      normalized_options = normalize_toolset_options(options) if options
       toolset_name = name.to_sym
       @toolsets ||= {}
       configured_toolset = (@toolsets[toolset_name] ||= Toolset.new(name: toolset_name))
 
       if block_given?
-        unless options.nil?
-          raise ArgumentError, "Provide either configuration options or a block, not both"
-        end
-
         yield configured_toolset
         return configured_toolset
       end
 
-      return configured_toolset unless options
+      return configured_toolset unless normalized_options
 
-      apply_toolset_options(configured_toolset, options)
+      apply_toolset_options(configured_toolset, normalized_options)
     end
 
     def toolsets
@@ -130,18 +139,102 @@ module RubyLLM
     end
 
     def apply_toolset_options(toolset, options)
-      config = options.dup.transform_keys(&:to_sym)
-
       TOOLSET_OPTION_MAPPINGS.each do |method_name, keys|
-        next unless keys.any? { |key| config[key] }
+        next unless keys.any? { |key| options.key?(key) }
 
-        values = keys.flat_map { |key| Array(config[key]) }
+        values = keys.flat_map { |key| Array(options[key]) }
         toolset.public_send(method_name, *values)
       end
 
       toolset
     end
     private_class_method :apply_toolset_options
+
+    def normalize_toolset_options(options)
+      normalized = options.dup.transform_keys(&:to_sym)
+      unknown_keys = normalized.keys - TOOLSET_OPTION_KEYS
+      return normalized if unknown_keys.empty?
+
+      label = unknown_keys.one? ? "option" : "options"
+      raise ArgumentError, "Unknown toolset #{label}: #{unknown_keys.join(', ')}"
+    end
+    private_class_method :normalize_toolset_options
+
+    def select_clients(client_names)
+      available_clients = clients.transform_keys(&:to_s)
+      return available_clients if client_names.nil?
+
+      requested_names = Array(client_names).flatten.compact.map(&:to_s).uniq
+      missing_names = requested_names - available_clients.keys
+      if missing_names.any?
+        raise Errors::ConfigurationError.new(
+          message: "Unknown MCP client name(s): #{missing_names.join(', ')}"
+        )
+      end
+
+      available_clients.slice(*requested_names)
+    end
+    private_class_method :select_clients
+
+    def acquire_connections(selected_clients)
+      connection_mutex.synchronize do
+        acquired_clients = []
+
+        begin
+          selected_clients.each do |name, client|
+            start_connection(name, client)
+            connection_leases[name] += 1
+            acquired_clients << [name, client]
+          end
+        rescue StandardError
+          release_connections_without_lock(acquired_clients.reverse)
+          raise
+        end
+      end
+    end
+    private_class_method :acquire_connections
+
+    def release_connections(selected_clients)
+      connection_mutex.synchronize do
+        release_connections_without_lock(selected_clients.to_a.reverse)
+      end
+    end
+    private_class_method :release_connections
+
+    def start_connection(name, client)
+      return unless connection_leases[name].zero?
+
+      client.start
+    rescue StandardError
+      client.stop if client.alive?
+      raise
+    end
+    private_class_method :start_connection
+
+    def release_connections_without_lock(selected_clients)
+      selected_clients.each do |name, client|
+        lease_count = connection_leases[name]
+        next if lease_count.zero?
+
+        if lease_count == 1
+          connection_leases.delete(name)
+          client.stop if client.alive?
+        else
+          connection_leases[name] = lease_count - 1
+        end
+      end
+    end
+    private_class_method :release_connections_without_lock
+
+    def connection_leases
+      @connection_leases ||= Hash.new(0)
+    end
+    private_class_method :connection_leases
+
+    def connection_mutex
+      @connection_mutex ||= Mutex.new
+    end
+    private_class_method :connection_mutex
   end
 end
 

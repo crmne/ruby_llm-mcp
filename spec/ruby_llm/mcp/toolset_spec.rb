@@ -39,6 +39,17 @@ RSpec.describe RubyLLM::MCP::Toolset do
       )
     end
 
+    it "raises when configured clients are missing from an empty client collection" do
+      toolset = described_class.new(name: :support).from_clients("missing_client")
+
+      expect do
+        toolset.tools(clients: [])
+      end.to raise_error(
+        RubyLLM::MCP::Errors::ConfigurationError,
+        /Unknown MCP client name\(s\): missing_client/
+      )
+    end
+
     it "supports include and exclude filters together" do
       toolset = described_class.new(name: :support)
                                .include_tools("read_file", "list_projects")
@@ -53,6 +64,28 @@ RSpec.describe RubyLLM::MCP::Toolset do
 
       tool_names = toolset.tools(clients: clients_map).map(&:name)
       expect(tool_names).to contain_exactly("read_file", "delete_file", "list_projects")
+    end
+  end
+
+  describe "#with_tools" do
+    it "keeps selected clients connected for the duration of the block" do
+      toolset = described_class.new(name: :support).from_clients("filesystem")
+      allow(RubyLLM::MCP).to receive(:establish_connection)
+        .with(client_names: ["filesystem"])
+        .and_yield(clients_map)
+
+      result = toolset.with_tools do |tools|
+        expect(tools.map(&:name)).to contain_exactly("read_file", "delete_file")
+        :completed
+      end
+
+      expect(result).to eq(:completed)
+    end
+
+    it "does not expose an array conversion that returns disconnected tools" do
+      toolset = described_class.new(name: :support)
+
+      expect(toolset).not_to respond_to(:to_a)
     end
   end
 end

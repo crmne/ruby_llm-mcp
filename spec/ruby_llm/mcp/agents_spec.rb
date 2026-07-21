@@ -212,7 +212,69 @@ RSpec.describe RubyLLM::MCP::Agents do
     end
   end
 
-  describe "end-to-end agent + toolset + llm" do
+  describe "agent execution" do
+    let(:tool) { double("Tool", name: "read_file") }
+    let(:client) { double("Client", name: "filesystem", tools: [tool]) }
+    let(:clients) { { "filesystem" => client } }
+    let(:chat) do
+      double("Chat", with_tools: nil, ask: :asked, say: :said, complete: :completed)
+    end
+    let(:agent_class) do
+      Class.new(RubyLLM::Agent) do
+        include RubyLLM::MCP::Agents
+
+        with_mcps :filesystem
+      end
+    end
+    let(:agent) do
+      agent_class.allocate.tap { |instance| instance.instance_variable_set(:@chat, chat) }
+    end
+
+    before do
+      allow(RubyLLM::MCP).to receive(:establish_connection)
+        .with(client_names: ["filesystem"])
+        .and_yield(clients)
+    end
+
+    it "wraps ask in the MCP connection scope" do
+      expect(agent.ask("hello")).to eq(:asked)
+      expect(chat).to have_received(:with_tools).with(tool)
+    end
+
+    it "wraps say in the MCP connection scope" do
+      expect(agent.say("hello")).to eq(:said)
+      expect(chat).to have_received(:with_tools).with(tool)
+    end
+
+    it "wraps complete in the MCP connection scope" do
+      expect(agent.complete).to eq(:completed)
+      expect(chat).to have_received(:with_tools).with(tool)
+    end
+
+    it "connects only clients selected by toolsets and direct MCP configuration" do
+      RubyLLM::MCP.toolset(:projects, clients: [:projects])
+      scoped_class = Class.new(RubyLLM::Agent) do
+        include RubyLLM::MCP::Agents
+
+        with_toolsets :projects
+        with_mcps :filesystem
+      end
+      scoped_agent = scoped_class.allocate
+      scoped_agent.instance_variable_set(:@chat, chat)
+      projects_client = double("ProjectsClient", name: "projects", tools: [])
+
+      allow(RubyLLM::MCP).to receive(:establish_connection)
+        .with(client_names: %w[projects filesystem])
+        .and_yield("projects" => projects_client, "filesystem" => client)
+
+      scoped_agent.ask("hello")
+
+      expect(RubyLLM::MCP).to have_received(:establish_connection)
+        .with(client_names: %w[projects filesystem])
+    end
+  end
+
+  describe "end-to-end agent + toolset + llm", :vcr do
     before do
       MCPTestConfiguration.reset_config!
       MCPTestConfiguration.configure_ruby_llm!
@@ -223,7 +285,10 @@ RSpec.describe RubyLLM::MCP::Agents do
       cleanup_agent_e2e_mcp!
     end
 
-    it "runs with_toolsets and calls MCP tool(s) during agent ask" do
+    it "runs with_toolsets and calls MCP tool(s) during agent ask",
+       vcr: {
+         cassette_name: "with_stdio-native_with_openai_gpt-4_1_with_tool_adds_a_tool_to_the_chat"
+       } do
       RubyLLM::MCP.toolset(
         :agent_messages,
         clients: [:agent_stdio],
@@ -237,18 +302,15 @@ RSpec.describe RubyLLM::MCP::Agents do
         with_toolsets :agent_messages
       end
 
-      response = nil
-      VCR.use_cassette(
-        "with_stdio-native_with_openai_gpt-4_1_with_tool_adds_a_tool_to_the_chat",
-        allow_playback_repeats: true
-      ) do
-        response = klass.new.ask("Can you pull messages for ruby channel and let me know what they say?")
-      end
+      response = klass.new.ask("Can you pull messages for ruby channel and let me know what they say?")
 
       expect(response.content).to include("Ruby is a great language")
     end
 
-    it "runs with_mcps and calls MCP tool(s) during agent ask" do
+    it "runs with_mcps and calls MCP tool(s) during agent ask",
+       vcr: {
+         cassette_name: "with_stdio-native_with_openai_gpt-4_1_with_tools_adds_tools_to_the_chat"
+       } do
       klass = Class.new(RubyLLM::Agent) do
         include RubyLLM::MCP::Agents
 
@@ -256,13 +318,7 @@ RSpec.describe RubyLLM::MCP::Agents do
         with_mcps :agent_stdio
       end
 
-      response = nil
-      VCR.use_cassette(
-        "with_stdio-native_with_openai_gpt-4_1_with_tools_adds_tools_to_the_chat",
-        allow_playback_repeats: true
-      ) do
-        response = klass.new.ask("Can you add 1 and 2?")
-      end
+      response = klass.new.ask("Can you add 1 and 2?")
 
       expect(response.content).to include("3")
     end
