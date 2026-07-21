@@ -493,7 +493,7 @@ module RubyLLM
           def handle_oauth_authorization_error(response, status_code)
             response_body = response.respond_to?(:body) ? response.body.to_s : ""
             error_body = JSON.parse(response_body)
-            error_message = error_body.dig("error", "message") || "Authorization failed"
+            error_message = oauth_error_message(error_body) || "Authorization failed"
 
             raise Errors::TransportError.new(
               code: status_code,
@@ -504,6 +504,17 @@ module RubyLLM
               code: status_code,
               message: "Authorization failed (403 Forbidden). Check token scope and permissions."
             )
+          end
+
+          # A 403 body can be either a JSON-RPC error ({ "error" => { "message" => ... } }) or an
+          # RFC 6749 OAuth error ({ "error" => "invalid_token", "error_description" => ... })
+          def oauth_error_message(error_body)
+            return unless error_body.is_a?(Hash)
+
+            case error_body["error"]
+            when Hash then error_body["error"]["message"]
+            when String then error_body["error_description"] || error_body["error"]
+            end
           end
 
           def handle_json_error_response(response, status_code)
