@@ -1,6 +1,7 @@
 # frozen_string_literal: true
 
 require "spec_helper"
+require "base64"
 
 RSpec.describe RubyLLM::MCP::Auth::TokenManager do
   let(:http_client) { instance_double(HTTPX::Session) }
@@ -103,6 +104,70 @@ RSpec.describe RubyLLM::MCP::Auth::TokenManager do
       end
     end
 
+    context "with client_secret_basic auth (RFC 6749 §2.3.1)" do
+      let(:client_metadata_basic) do
+        RubyLLM::MCP::Auth::ClientMetadata.new(
+          redirect_uris: ["http://localhost:8080/callback"],
+          token_endpoint_auth_method: "client_secret_basic"
+        )
+      end
+
+      let(:client_info_basic) do
+        RubyLLM::MCP::Auth::ClientInfo.new(
+          client_id: "test_client_id",
+          client_secret: "test_secret",
+          metadata: client_metadata_basic
+        )
+      end
+
+      it "sends credentials via HTTP Basic Authorization header" do
+        manager.exchange_authorization_code(server_metadata, client_info_basic, code, pkce, server_url)
+
+        expect(http_client).to have_received(:post) do |_url, options|
+          expected = Base64.strict_encode64("test_client_id:test_secret")
+          expect(options[:headers]["Authorization"]).to eq("Basic #{expected}")
+          expect(options[:form]).not_to have_key(:client_secret)
+        end
+      end
+
+      context "when credentials contain reserved characters" do
+        let(:client_info_basic) do
+          RubyLLM::MCP::Auth::ClientInfo.new(
+            client_id: "test:client",
+            client_secret: "s+e cret",
+            metadata: client_metadata_basic
+          )
+        end
+
+        it "form-encodes credentials before constructing the Authorization header" do
+          manager.exchange_authorization_code(server_metadata, client_info_basic, code, pkce, server_url)
+
+          expect(http_client).to have_received(:post) do |_url, options|
+            expected = Base64.strict_encode64("test%3Aclient:s%2Be+cret")
+            expect(options[:headers]["Authorization"]).to eq("Basic #{expected}")
+          end
+        end
+      end
+    end
+
+    context "with a client secret cached by an older version" do
+      let(:legacy_client_info) do
+        RubyLLM::MCP::Auth::ClientInfo.new(
+          client_id: "test_client_id",
+          client_secret: "test_secret",
+          metadata: client_metadata
+        )
+      end
+
+      it "infers client_secret_post when the cached method is none" do
+        manager.exchange_authorization_code(server_metadata, legacy_client_info, code, pkce, server_url)
+
+        expect(http_client).to have_received(:post) do |_url, options|
+          expect(options[:form][:client_secret]).to eq("test_secret")
+        end
+      end
+    end
+
     context "with redirect URI mismatch" do
       let(:error_response) do
         {
@@ -136,11 +201,18 @@ RSpec.describe RubyLLM::MCP::Auth::TokenManager do
   describe "#exchange_client_credentials" do
     let(:scope) { "mcp:read" }
 
+    let(:client_metadata_with_secret) do
+      RubyLLM::MCP::Auth::ClientMetadata.new(
+        redirect_uris: ["http://localhost:8080/callback"],
+        token_endpoint_auth_method: "client_secret_post"
+      )
+    end
+
     let(:client_info_with_secret) do
       RubyLLM::MCP::Auth::ClientInfo.new(
         client_id: "test_client_id",
         client_secret: "test_secret",
-        metadata: client_metadata
+        metadata: client_metadata_with_secret
       )
     end
 
