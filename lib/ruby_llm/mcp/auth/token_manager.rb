@@ -82,13 +82,13 @@ module RubyLLM
 
           parse_refresh_response(response, token)
         rescue Errors::TransportError => e
-          logger.warn(e.message)
+          logger.warn("Token refresh failed: #{e.class}")
           nil
         rescue JSON::ParserError => e
-          logger.warn("Invalid token refresh response: #{e.message}")
+          logger.warn("Invalid token refresh response: #{e.class}")
           nil
         rescue HTTPX::Error => e
-          logger.warn("Network error during token refresh: #{e.message}")
+          logger.warn("Network error during token refresh: #{e.class}")
           nil
         end
 
@@ -179,7 +179,7 @@ module RubyLLM
           response = http_client.post(server_metadata.token_endpoint, headers:, form: params)
 
           if response.is_a?(HTTPX::ErrorResponse)
-            logger.warn("Token refresh failed: #{response.error&.message || 'Request failed'}")
+            logger.warn("Token refresh request failed: #{response.error&.class || 'unknown error'}")
           elsif response.status != 200
             logger.warn("Token refresh failed: HTTP #{response.status}")
           end

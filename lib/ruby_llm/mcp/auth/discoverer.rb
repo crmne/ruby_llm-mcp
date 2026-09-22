@@ -23,7 +23,6 @@ module RubyLLM
           logger.debug("Discovering OAuth authorization server for #{server_url}")
 
           cached = storage.get_server_metadata(server_url)
-          return cached if cached && resource_metadata_url.nil?
 
           # Prefer protected resource metadata discovery to follow MCP authorization rules,
           # then fall back to direct auth server metadata discovery for compatibility.
@@ -32,6 +31,7 @@ module RubyLLM
           server_metadata ||= try_legacy_authorization_server_discovery(server_url)
           server_metadata ||= cached
           server_metadata ||= create_default_metadata(server_url)
+          validate_server_metadata_object!(server_metadata)
 
           # Cache and return
           storage.set_server_metadata(server_url, server_metadata) if server_metadata
@@ -39,6 +39,13 @@ module RubyLLM
         end
 
         private
+
+        def validate_server_metadata_object!(metadata)
+          validate_https_url!(metadata.issuer, "issuer")
+          validate_https_url!(metadata.authorization_endpoint, "authorization endpoint")
+          validate_https_url!(metadata.token_endpoint, "token endpoint")
+          validate_https_url!(metadata.registration_endpoint, "registration endpoint") if metadata.registration_endpoint
+        end
 
         # Try oauth-authorization-server discovery (server is own auth server)
         # @param server_url [String] MCP server URL
@@ -96,7 +103,7 @@ module RubyLLM
                 return server_metadata if server_metadata
               end
             rescue StandardError => e
-              logger.debug("oauth-protected-resource discovery failed for #{discovery_url}: #{e.message}")
+              logger.debug("oauth-protected-resource discovery failed for #{discovery_url}: #{e.class}")
             end
           end
           nil
@@ -134,6 +141,7 @@ module RubyLLM
         # @param url [String] discovery URL
         # @return [ServerMetadata] server metadata
         def fetch_server_metadata(url, expected_issuer:, enforce_issuer_match: true)
+          validate_https_url!(url, "server metadata URL")
           logger.debug("Fetching server metadata from #{url}")
           response = http_client.get(url)
 
@@ -163,6 +171,7 @@ module RubyLLM
         # @param url [String] discovery URL
         # @return [ResourceMetadata] resource metadata
         def fetch_resource_metadata(url, expected_resource:)
+          validate_https_url!(url, "resource metadata URL")
           logger.debug("Fetching resource metadata from #{url}")
           response = http_client.get(url)
 
@@ -188,7 +197,7 @@ module RubyLLM
               enforce_issuer_match: enforce_issuer_match
             )
           rescue StandardError => e
-            logger.debug("#{context} failed for #{url}: #{e.message}")
+            logger.debug("#{context} failed for #{url}: #{e.class}")
           end
           nil
         end
@@ -204,6 +213,13 @@ module RubyLLM
             raise Errors::TransportError.new(
               message: "Server metadata fetch failed: missing required issuer in response from #{source_url}"
             )
+          end
+
+          validate_https_url!(issuer, "issuer")
+          validate_https_url!(data["authorization_endpoint"], "authorization endpoint")
+          validate_https_url!(data["token_endpoint"], "token endpoint")
+          if data["registration_endpoint"]
+            validate_https_url!(data["registration_endpoint"], "registration endpoint")
           end
 
           return if issuer == expected_issuer
@@ -242,12 +258,26 @@ module RubyLLM
             )
           end
 
+
+          Array(data["authorization_servers"]).each do |url|
+            validate_https_url!(url, "authorization server")
+          end
+
           return if resource == expected_resource
 
           raise Errors::TransportError.new(
             message: "Resource metadata fetch failed: resource '#{resource}' did not match expected resource " \
                      "'#{expected_resource}' for #{source_url}"
           )
+        end
+
+        def validate_https_url!(value, label)
+          uri = URI.parse(value.to_s)
+          unless uri.scheme == "https" && uri.host && !uri.userinfo && !uri.fragment
+            raise Errors::TransportError.new(message: "OAuth #{label} must be an HTTPS URL without credentials or a fragment")
+          end
+        rescue URI::InvalidURIError
+          raise Errors::TransportError.new(message: "OAuth #{label} must be a valid HTTPS URL")
         end
       end
     end

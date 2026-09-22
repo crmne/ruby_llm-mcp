@@ -156,7 +156,7 @@ module RubyLLM
           logger.debug("OAuth apply_authorization: token=#{token ? 'present' : 'nil'}")
           return unless token
 
-          logger.debug("OAuth applying authorization header: #{token.to_header[0..20]}...")
+          logger.debug("OAuth applying authorization header")
           request.headers["Authorization"] = token.to_header
         end
 
@@ -172,7 +172,7 @@ module RubyLLM
                                             requested_scope: nil)
           resolved_resource_metadata = resource_metadata || resource_metadata_url
           logger.debug("Handling authentication challenge")
-          logger.debug("  WWW-Authenticate: #{www_authenticate}") if www_authenticate
+          logger.debug("  WWW-Authenticate challenge present") if www_authenticate
           logger.debug("  Resource metadata URL: #{resolved_resource_metadata}") if resolved_resource_metadata
           logger.debug("  Requested scope: #{requested_scope}") if requested_scope
 
@@ -206,7 +206,7 @@ module RubyLLM
               )
               return true if new_token
             rescue StandardError => e
-              logger.warn("Client credentials flow failed: #{e.message}")
+              logger.warn("Client credentials flow failed: #{e.class}")
             end
           end
 
@@ -256,7 +256,7 @@ module RubyLLM
           }
           headers["MCP-Protocol-Version"] = RubyLLM::MCP.config.protocol_version
 
-          HTTPX.plugin(:follow_redirects).with(
+          RubyLLM::MCP::Native::Transports::Support::HTTPClient.secure(HTTPX).with(
             timeout: { request_timeout: DEFAULT_OAUTH_TIMEOUT },
             headers: headers
           )
@@ -284,17 +284,18 @@ module RubyLLM
           raise ArgumentError, "Invalid redirect URI: #{uri} - #{e.message}"
         end
 
-        # Validate HTTPS usage for OAuth endpoint (warning only)
+        # Validate HTTPS usage for OAuth endpoint
         # @param url [String] endpoint URL
         # @param endpoint_name [String] descriptive name for logging
         def validate_https_endpoint(url, endpoint_name)
           uri = URI.parse(url)
-          is_localhost = ["localhost", "127.0.0.1", "::1"].include?(uri.host)
-
-          if uri.scheme != "https" && !is_localhost
-            logger.warn("WARNING: #{endpoint_name} is not using HTTPS: #{url}")
-            logger.warn("OAuth endpoints SHOULD use HTTPS in production environments")
+          unless uri.scheme == "https" && uri.host && !uri.userinfo && !uri.fragment
+            raise Errors::TransportError.new(
+              message: "OAuth #{endpoint_name} must be an HTTPS URL without credentials or a fragment"
+            )
           end
+        rescue URI::InvalidURIError
+          raise Errors::TransportError.new(message: "OAuth #{endpoint_name} must be a valid HTTPS URL")
         end
 
         # Refresh access token using refresh token
@@ -332,7 +333,7 @@ module RubyLLM
         def update_scope_if_needed(new_scope)
           return unless new_scope && new_scope != scope
 
-          logger.debug("Updating scope from '#{scope}' to '#{new_scope}'")
+          logger.debug("Updating OAuth scope")
           self.scope = new_scope
         end
       end

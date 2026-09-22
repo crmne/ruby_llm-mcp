@@ -68,6 +68,7 @@ module RubyLLM
             @url = URI(url)
             @coordinator = coordinator
             @request_timeout = request_timeout
+            @http_security_options = Support::HTTPClient.security_options
             @sse_timeout = sse_timeout
             @headers = headers || {}
             @session_id = session_id
@@ -256,7 +257,7 @@ module RubyLLM
 
           def create_connection
             timeout_seconds = @request_timeout / 1000.0
-            client = Support::HTTPClient.connection.with(
+            client = Support::HTTPClient.connection(@http_security_options).with(
               timeout: {
                 connect_timeout: 10,
                 read_timeout: timeout_seconds,
@@ -358,7 +359,7 @@ module RubyLLM
           def create_connection_with_streaming_callbacks(request_id, close_when_fulfilled: false)
             buffer = +""
 
-            client = Support::HTTPClient.connection.plugin(:callbacks)
+            client = Support::HTTPClient.connection(@http_security_options).plugin(:callbacks)
             client = client.on_response_body_chunk do |request, response, chunk|
               next unless running?
 
@@ -738,7 +739,7 @@ module RubyLLM
           end
 
           def create_connection_with_sse_callbacks(options, headers)
-            client = HTTPX.plugin(:callbacks)
+            client = Support::HTTPClient.secure(HTTPX.plugin(:callbacks), @http_security_options)
             client = add_on_response_body_chunk_callback(client, options)
 
             sse_timeout_seconds = if @sse_timeout

@@ -60,7 +60,7 @@ module RubyLLM
               server_url
             )
 
-            logger.debug("Authorization URL: #{auth_url}")
+            logger.debug("OAuth authorization URL prepared")
             auth_url
           end
 

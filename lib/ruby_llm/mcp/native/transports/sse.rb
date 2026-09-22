@@ -14,6 +14,7 @@ module RubyLLM
             @messages_url = nil
             @coordinator = coordinator
             @request_timeout = request_timeout
+            @http_security_options = Support::HTTPClient.security_options
 
             # Extract options
             extracted_options = options.dup
@@ -157,7 +158,7 @@ module RubyLLM
 
           def send_request(body, request_id)
             headers = build_request_headers
-            http_client = Support::HTTPClient.connection.with(timeout: { request_timeout: @request_timeout / 1000 },
+            http_client = Support::HTTPClient.connection(@http_security_options).with(timeout: { request_timeout: @request_timeout / 1000 },
                                                               headers: headers)
             response = http_client.post(@messages_url, body: JSON.generate(body))
             handle_httpx_error_response!(response,
@@ -332,12 +333,12 @@ module RubyLLM
           def set_message_endpoint(endpoint)
             endpoint_url = if endpoint.is_a?(String)
                              endpoint
-                           elsif endpoint.is_a?(Hash)
+            elsif endpoint.is_a?(Hash)
                              # Support richer endpoint metadata (e.g., { "url": "...", "last_event_id": "..." })
                              endpoint["url"] || endpoint[:url]
-                           else
+            else
                              endpoint.to_s
-                           end
+            end
 
             unless endpoint_url && !endpoint_url.empty?
               raise Errors::TransportError.new(
@@ -348,11 +349,12 @@ module RubyLLM
 
             uri = URI.parse(endpoint_url)
 
-            @messages_url = if uri.host.nil?
-                              "#{@root_url}#{endpoint_url}"
-                            else
-                              endpoint_url
-                            end
+            resolved_uri = uri.host.nil? ? URI.join("#{@root_url}/", endpoint_url) : uri
+            root_uri = URI.parse(@root_url)
+            unless resolved_uri.scheme == root_uri.scheme && resolved_uri.host == root_uri.host && resolved_uri.port == root_uri.port
+              raise Errors::TransportError.new(message: "SSE message endpoint must use the server origin", code: nil)
+            end
+            @messages_url = resolved_uri.to_s
 
             RubyLLM::MCP.logger.info "SSE message endpoint set to: #{@messages_url}"
           rescue URI::InvalidURIError => e
@@ -391,10 +393,10 @@ module RubyLLM
               end
             end
 
-            sse_client = HTTPX.plugin(:stream).with(headers: headers)
+            sse_client = Support::HTTPClient.secure(HTTPX.plugin(:stream), @http_security_options).with(headers: headers)
             return sse_client unless @version == :http1
 
-            sse_client.with(ssl: { alpn_protocols: ["http/1.1"] })
+            sse_client.with(ssl: { alpn_protocols: [ "http/1.1" ] })
           end
 
           def validate_sse_response!(response)
@@ -592,9 +594,9 @@ module RubyLLM
               if @pending_requests.key?(request_id)
                 matching_result = if result.is_a?(RubyLLM::MCP::Result)
                                     result.matching_id?(request_id)
-                                  else
+                else
                                     true
-                                  end
+                end
 
                 response_queue = @pending_requests.delete(request_id) if matching_result
               else
