@@ -51,6 +51,24 @@ RSpec.describe RubyLLM::MCP::Native::Protocol do
     end
   end
 
+  describe ".sampling_content_array_supported?" do
+    it "returns true for stable versions at or above 2025-11-25" do
+      expect(described_class.sampling_content_array_supported?("2025-11-25")).to be(true)
+      expect(described_class.sampling_content_array_supported?("2026-01-26")).to be(true)
+    end
+
+    it "returns true for DRAFT labels" do
+      expect(described_class.sampling_content_array_supported?("DRAFT-2026-01-26")).to be(true)
+      expect(described_class.sampling_content_array_supported?("DRAFT-next")).to be(true)
+    end
+
+    it "returns false for nil, invalid, and older stable versions" do
+      expect(described_class.sampling_content_array_supported?(nil)).to be(false)
+      expect(described_class.sampling_content_array_supported?("invalid")).to be(false)
+      expect(described_class.sampling_content_array_supported?("2025-06-18")).to be(false)
+    end
+  end
+
   describe ".extensions_supported?" do
     it "returns true for stable versions at or above 2025-06-18" do
       expect(described_class.extensions_supported?("2025-06-18")).to be(true)

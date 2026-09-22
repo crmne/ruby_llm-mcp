@@ -227,4 +227,21 @@ RSpec.describe "RubyLLM compatibility" do # rubocop:disable RSpec/DescribeClass
 
     expect(response[:result][:content]).to eq(type: :image, data: image["data"], mimeType: "image/png")
   end
+
+  it "formats mixed sampling responses as a content array when the negotiated protocol allows one" do
+    attachments = [image, image].map { |block| RubyLLM::MCP::Attachment.new(block["data"], block["mimeType"]) }
+    content = RubyLLM::MCP::Content.new(text: "Two pictures", attachments: attachments)
+    message = RubyLLM::Message.new(role: :assistant, **content.message_options)
+    response = RubyLLM::MCP::Native::Messages::Responses.sampling_create_message(
+      id: 1, message: message, model: "test", protocol_version: "2025-11-25"
+    )
+
+    expect(response[:result][:content]).to eq(
+      [
+        { type: "text", text: "Two pictures" },
+        { type: :image, data: image["data"], mimeType: "image/png" },
+        { type: :image, data: image["data"], mimeType: "image/png" }
+      ]
+    )
+  end
 end

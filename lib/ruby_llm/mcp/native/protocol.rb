@@ -7,6 +7,8 @@ module RubyLLM
         module_function
 
         LATEST_PROTOCOL_VERSION = "2025-11-25"
+        # First protocol version whose CreateMessageResult.content accepts an array of blocks.
+        SAMPLING_CONTENT_ARRAY_MIN_VERSION = "2025-11-25"
         EXTENSIONS_PROTOCOL_VERSION = "2025-06-18"
         DRAFT_PROTOCOL_VERSION = "2026-01-26"
         DEFAULT_NEGOTIATED_PROTOCOL_VERSION = "2025-03-26"
@@ -60,6 +62,18 @@ module RubyLLM
           return true if normalized.start_with?("DRAFT-")
 
           comparison = compare_date_versions(normalized, DRAFT_PROTOCOL_VERSION)
+          !comparison.nil? && comparison >= 0
+        end
+
+        # A sampling CreateMessageResult may carry an array of content blocks from
+        # 2025-11-25 onward; earlier tracks allow only a single content block.
+        def sampling_content_array_supported?(version)
+          return false if version.nil?
+
+          normalized = version.to_s
+          return true if normalized.start_with?("DRAFT-")
+
+          comparison = compare_date_versions(normalized, SAMPLING_CONTENT_ARRAY_MIN_VERSION)
           !comparison.nil? && comparison >= 0
         end
 
