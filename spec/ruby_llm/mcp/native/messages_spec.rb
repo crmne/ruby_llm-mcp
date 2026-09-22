@@ -690,6 +690,7 @@ RSpec.describe RubyLLM::MCP::Native::Messages do
             role: "assistant",
             content: mock_content
           ).tap do |msg|
+            allow(msg).to receive(:respond_to?).with(:finish_reason).and_return(false)
             allow(msg).to receive(:respond_to?).with(:stop_reason).and_return(false)
           end
         end
@@ -730,6 +731,7 @@ RSpec.describe RubyLLM::MCP::Native::Messages do
             content: mock_content,
             stop_reason: nil
           ).tap do |msg|
+            allow(msg).to receive(:respond_to?).with(:finish_reason).and_return(false)
             allow(msg).to receive(:respond_to?).with(:stop_reason).and_return(true)
           end
         end
@@ -756,6 +758,7 @@ RSpec.describe RubyLLM::MCP::Native::Messages do
               content: mock_content,
               stop_reason: snake_case_value
             ).tap do |msg|
+              allow(msg).to receive(:respond_to?).with(:finish_reason).and_return(false)
               allow(msg).to receive(:respond_to?).with(:stop_reason).and_return(true)
             end
           end
@@ -817,6 +820,7 @@ RSpec.describe RubyLLM::MCP::Native::Messages do
             content: mock_content,
             stop_reason: "custom_stop_reason"
           ).tap do |msg|
+            allow(msg).to receive(:respond_to?).with(:finish_reason).and_return(false)
             allow(msg).to receive(:respond_to?).with(:stop_reason).and_return(true)
           end
         end
@@ -831,6 +835,70 @@ RSpec.describe RubyLLM::MCP::Native::Messages do
 
         it "converts unknown snake_case values to camelCase" do
           expect(body[:result][:stopReason]).to eq("customStopReason")
+        end
+      end
+
+      context "when message has a RubyLLM 2 finish_reason" do
+        def message_with_finish_reason(finish_reason, stop_reason: :__unset)
+          double("Message", role: "assistant", content: "Done").tap do |msg|
+            allow(msg).to receive(:respond_to?).with(:finish_reason).and_return(true)
+            allow(msg).to receive(:finish_reason).and_return(finish_reason)
+            if stop_reason == :__unset
+              allow(msg).to receive(:respond_to?).with(:stop_reason).and_return(false)
+            else
+              allow(msg).to receive(:respond_to?).with(:stop_reason).and_return(true)
+              allow(msg).to receive(:stop_reason).and_return(stop_reason)
+            end
+          end
+        end
+
+        {
+          max_tokens: "maxTokens",
+          tool_calls: "toolUse",
+          stop: "endTurn",
+          content_filter: "contentFilter",
+          some_other_reason: "someOtherReason"
+        }.each do |finish_reason, expected|
+          it "maps finish_reason #{finish_reason.inspect} to #{expected}" do
+            body = described_class::Responses.sampling_create_message(
+              id: "req-123",
+              model: "gpt-4",
+              message: message_with_finish_reason(finish_reason)
+            )
+
+            expect(body[:result][:stopReason]).to eq(expected)
+          end
+        end
+
+        it "prefers finish_reason over a legacy stop_reason when both are present" do
+          body = described_class::Responses.sampling_create_message(
+            id: "req-123",
+            model: "gpt-4",
+            message: message_with_finish_reason(:max_tokens, stop_reason: "tool_use")
+          )
+
+          expect(body[:result][:stopReason]).to eq("maxTokens")
+        end
+
+        it "falls back to the legacy stop_reason when finish_reason is nil" do
+          body = described_class::Responses.sampling_create_message(
+            id: "req-123",
+            model: "gpt-4",
+            message: message_with_finish_reason(nil, stop_reason: "tool_use")
+          )
+
+          expect(body[:result][:stopReason]).to eq("toolUse")
+        end
+      end
+
+      context "with the installed RubyLLM::Message" do
+        it "maps a finish_reason when RubyLLM defines one and keeps endTurn otherwise" do
+          message = RubyLLM::Message.new(role: :assistant, content: "Done", finish_reason: :max_tokens)
+          expected = RubyLLM::Message.method_defined?(:finish_reason) ? "maxTokens" : "endTurn"
+
+          body = described_class::Responses.sampling_create_message(id: "req-123", model: "gpt-4", message: message)
+
+          expect(body[:result][:stopReason]).to eq(expected)
         end
       end
       # rubocop:enable RSpec/VerifiedDoubles

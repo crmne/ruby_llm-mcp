@@ -140,6 +140,14 @@ RSpec.describe "RubyLLM compatibility" do # rubocop:disable RSpec/DescribeClass
     expect(response[:result][:content]).to eq(type: "text", text: "hello")
   end
 
+  it "reports the installed RubyLLM message's finish reason as the MCP stop reason" do
+    message = RubyLLM::Message.new(role: :assistant, content: "hello", finish_reason: :max_tokens)
+    expected = RubyLLM::Message.method_defined?(:finish_reason) ? "maxTokens" : "endTurn"
+    response = RubyLLM::MCP::Native::Messages::Responses.sampling_create_message(id: 1, message: message, model: "test")
+
+    expect(response[:result][:stopReason]).to eq(expected)
+  end
+
   it "formats image sampling responses with base64 data" do
     attachment = RubyLLM::MCP::Attachment.new(image["data"], image["mimeType"])
     content = RubyLLM::MCP::Content.new(attachments: [attachment])
