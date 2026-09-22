@@ -45,7 +45,7 @@ module RubyLLM
       def ask(chat, arguments: {}, &)
         include(chat, arguments: arguments)
 
-        chat.complete(&)
+        RubyLLM::MCP.generate_response(chat, &)
       end
 
       alias say ask

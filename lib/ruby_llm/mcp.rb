@@ -58,6 +58,21 @@ module RubyLLM
       Client.new(...)
     end
 
+    # Ask the model for a response even when the chat already ends with an
+    # assistant message. RubyLLM 2's Chat#complete returns that existing message
+    # without calling the provider, but MCP prompts and sampling requests may
+    # legitimately end with assistant text the model is expected to continue.
+    # Chat#generate forces one generation and #complete then finishes any tool
+    # cycle it started. RubyLLM 1 has no #generate and its #complete always
+    # generates, so only #complete is called there.
+    def generate_response(chat, &)
+      if chat.respond_to?(:generate)
+        chat.generate(&)
+      end
+
+      chat.complete(&)
+    end
+
     def establish_connection(client_names: nil)
       selected_clients = select_clients(client_names)
 

@@ -119,6 +119,20 @@ RSpec.describe "RubyLLM compatibility" do # rubocop:disable RSpec/DescribeClass
     expect(content.attachments.first.content).to eq("image bytes")
   end
 
+  it "asks the model to continue an assistant-ended prompt with the installed RubyLLM chat API" do
+    prompt = RubyLLM::MCP::Prompt.new(adapter, "name" => "prefill")
+    messages = [{ "role" => "assistant", "content" => { "type" => "text", "text" => "The answer is" } }]
+    result = RubyLLM::MCP::Result.new({ "result" => { "messages" => messages } })
+    allow(adapter).to receive(:execute_prompt).with(name: "prefill", arguments: {}).and_return(result)
+    chat = RubyLLM.context { |config| config.openai_api_key = "test" }.chat(model: "gpt-4.1", provider: :openai)
+    if RubyLLM::Chat.method_defined?(:generate)
+      expect(chat).to receive(:generate).ordered
+    end
+    expect(chat).to receive(:complete).ordered.and_return(:generated)
+
+    expect(prompt.ask(chat)).to eq(:generated)
+  end
+
   it "formats text sampling responses with the installed RubyLLM message API" do
     message = RubyLLM::Message.new(role: :assistant, content: "hello")
     response = RubyLLM::MCP::Native::Messages::Responses.sampling_create_message(id: 1, message: message, model: "test")

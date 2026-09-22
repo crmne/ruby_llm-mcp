@@ -43,7 +43,7 @@ module RubyLLM
               chat.add_message(create_message(message))
             end
 
-            chat.complete
+            RubyLLM::MCP.generate_response(chat)
           end
 
           private
