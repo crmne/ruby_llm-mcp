@@ -99,10 +99,14 @@ module RubyLLM
 
       def validate_arguments!(incoming_arguments)
         @arguments.each do |arg|
-          if arg.required && incoming_arguments.key?(arg.name)
-            raise Errors::PromptArgumentError, "Argument #{arg.name} is required"
+          if arg.required && !argument_present?(incoming_arguments, arg.name)
+            raise Errors::PromptArgumentError.new(message: "Argument #{arg.name} is required")
           end
         end
+      end
+
+      def argument_present?(incoming_arguments, name)
+        incoming_arguments.key?(name.to_s) || incoming_arguments.key?(name.to_sym)
       end
 
       def create_content_for_message(content)
