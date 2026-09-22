@@ -678,6 +678,93 @@ RSpec.describe RubyLLM::MCP::Native::Messages do
       end
     end
 
+    describe ".sampling_create_message with text and multiple attachments" do
+      let(:extensions_schema_path) { File.join(__dir__, "../../../fixtures/mcp_definition/2025-06-18-schema.json") }
+      let(:extensions_schemer) { JSONSchemer.schema(JSON.parse(File.read(extensions_schema_path))) }
+      let(:message) do
+        sampling_message("Important caption", attachment("b25l", "image/png"), attachment("dHdv", "image/jpeg"))
+      end
+
+      # Builds the message the way the installed RubyLLM stores attachments:
+      # RubyLLM 1 keeps an MCP::Content as the content, RubyLLM 2 keeps a
+      # String content plus separate attachments.
+      def sampling_message(text, *attachments)
+        content = RubyLLM::MCP::Content.new(text: text, attachments: attachments)
+        RubyLLM::Message.new(role: :assistant, **content.message_options)
+      end
+
+      def attachment(base64, mime_type)
+        RubyLLM::MCP::Attachment.new(base64, mime_type)
+      end
+
+      def build(message, protocol_version)
+        described_class::Responses.sampling_create_message(
+          id: "req-123", model: "gpt-4o", message: message, protocol_version: protocol_version
+        )
+      end
+
+      def validation_errors(body, schemer_instance)
+        body_json = JSON.parse(body.to_json)
+        response_json = { "jsonrpc" => "2.0", "id" => body_json["id"], "result" => body_json["result"] }
+        schemer_instance.validate(response_json).to_a
+      end
+
+      it "emits every content block as an array on the 2025-11-25 track" do
+        body = build(message, "2025-11-25")
+
+        expect(body[:result][:content]).to eq(
+          [
+            { type: "text", text: "Important caption" },
+            { type: :image, data: "b25l", mimeType: "image/png" },
+            { type: :image, data: "dHdv", mimeType: "image/jpeg" }
+          ]
+        )
+        expect(validation_errors(body, schemer)).to be_empty
+      end
+
+      it "emits an array on DRAFT protocol labels" do
+        expect(build(message, "DRAFT-2026-01-26")[:result][:content].length).to eq(3)
+      end
+
+      it "emits only the first block on the 2025-06-18 track and when no version was negotiated" do
+        body = build(message, "2025-06-18")
+
+        expect(body[:result][:content]).to eq({ type: "text", text: "Important caption" })
+        expect(validation_errors(body, extensions_schemer)).to be_empty
+        expect(build(message, nil)[:result][:content]).to eq({ type: "text", text: "Important caption" })
+      end
+
+      it "emits a single image block unchanged for one attachment without text" do
+        body = build(sampling_message("", attachment("b25l", "image/png")), "2025-11-25")
+
+        expect(body[:result][:content]).to eq({ type: :image, data: "b25l", mimeType: "image/png" })
+        expect(validation_errors(body, schemer)).to be_empty
+      end
+
+      it "emits a single text block unchanged when there are no attachments" do
+        body = build(sampling_message("Just text"), "2025-11-25")
+
+        expect(body[:result][:content]).to eq({ type: "text", text: "Just text" })
+        expect(validation_errors(body, schemer)).to be_empty
+      end
+
+      it "includes audio blocks and skips unsupported attachment types with a warning" do
+        allow(RubyLLM::MCP.logger).to receive(:warn)
+        mixed = sampling_message("Listen", attachment("cGRm", "application/pdf"), attachment("d2F2", "audio/wav"))
+
+        body = build(mixed, "2025-11-25")
+
+        expect(body[:result][:content]).to eq(
+          [
+            { type: "text", text: "Listen" },
+            { type: :audio, data: "d2F2", mimeType: "audio/wav" }
+          ]
+        )
+        expect(validation_errors(body, schemer)).to be_empty
+        expect(RubyLLM::MCP.logger).to have_received(:warn).with(%r{unsupported type pdf \(application/pdf\)})
+      end
+    end
+
     describe ".sampling_create_message" do
       let(:mock_content) do
         double("Content", text: "Hello, world!")
@@ -690,6 +777,7 @@ RSpec.describe RubyLLM::MCP::Native::Messages do
             role: "assistant",
             content: mock_content
           ).tap do |msg|
+            allow(msg).to receive(:respond_to?).with(:finish_reason).and_return(false)
             allow(msg).to receive(:respond_to?).with(:stop_reason).and_return(false)
           end
         end
@@ -730,6 +818,7 @@ RSpec.describe RubyLLM::MCP::Native::Messages do
             content: mock_content,
             stop_reason: nil
           ).tap do |msg|
+            allow(msg).to receive(:respond_to?).with(:finish_reason).and_return(false)
             allow(msg).to receive(:respond_to?).with(:stop_reason).and_return(true)
           end
         end
@@ -756,6 +845,7 @@ RSpec.describe RubyLLM::MCP::Native::Messages do
               content: mock_content,
               stop_reason: snake_case_value
             ).tap do |msg|
+              allow(msg).to receive(:respond_to?).with(:finish_reason).and_return(false)
               allow(msg).to receive(:respond_to?).with(:stop_reason).and_return(true)
             end
           end
@@ -817,6 +907,7 @@ RSpec.describe RubyLLM::MCP::Native::Messages do
             content: mock_content,
             stop_reason: "custom_stop_reason"
           ).tap do |msg|
+            allow(msg).to receive(:respond_to?).with(:finish_reason).and_return(false)
             allow(msg).to receive(:respond_to?).with(:stop_reason).and_return(true)
           end
         end
@@ -831,6 +922,70 @@ RSpec.describe RubyLLM::MCP::Native::Messages do
 
         it "converts unknown snake_case values to camelCase" do
           expect(body[:result][:stopReason]).to eq("customStopReason")
+        end
+      end
+
+      context "when message has a RubyLLM 2 finish_reason" do
+        def message_with_finish_reason(finish_reason, stop_reason: :__unset)
+          double("Message", role: "assistant", content: "Done").tap do |msg|
+            allow(msg).to receive(:respond_to?).with(:finish_reason).and_return(true)
+            allow(msg).to receive(:finish_reason).and_return(finish_reason)
+            if stop_reason == :__unset
+              allow(msg).to receive(:respond_to?).with(:stop_reason).and_return(false)
+            else
+              allow(msg).to receive(:respond_to?).with(:stop_reason).and_return(true)
+              allow(msg).to receive(:stop_reason).and_return(stop_reason)
+            end
+          end
+        end
+
+        {
+          max_tokens: "maxTokens",
+          tool_calls: "toolUse",
+          stop: "endTurn",
+          content_filter: "contentFilter",
+          some_other_reason: "someOtherReason"
+        }.each do |finish_reason, expected|
+          it "maps finish_reason #{finish_reason.inspect} to #{expected}" do
+            body = described_class::Responses.sampling_create_message(
+              id: "req-123",
+              model: "gpt-4",
+              message: message_with_finish_reason(finish_reason)
+            )
+
+            expect(body[:result][:stopReason]).to eq(expected)
+          end
+        end
+
+        it "prefers finish_reason over a legacy stop_reason when both are present" do
+          body = described_class::Responses.sampling_create_message(
+            id: "req-123",
+            model: "gpt-4",
+            message: message_with_finish_reason(:max_tokens, stop_reason: "tool_use")
+          )
+
+          expect(body[:result][:stopReason]).to eq("maxTokens")
+        end
+
+        it "falls back to the legacy stop_reason when finish_reason is nil" do
+          body = described_class::Responses.sampling_create_message(
+            id: "req-123",
+            model: "gpt-4",
+            message: message_with_finish_reason(nil, stop_reason: "tool_use")
+          )
+
+          expect(body[:result][:stopReason]).to eq("toolUse")
+        end
+      end
+
+      context "with the installed RubyLLM::Message" do
+        it "maps a finish_reason when RubyLLM defines one and keeps endTurn otherwise" do
+          message = RubyLLM::Message.new(role: :assistant, content: "Done", finish_reason: :max_tokens)
+          expected = RubyLLM::Message.method_defined?(:finish_reason) ? "maxTokens" : "endTurn"
+
+          body = described_class::Responses.sampling_create_message(id: "req-123", model: "gpt-4", message: message)
+
+          expect(body[:result][:stopReason]).to eq(expected)
         end
       end
       # rubocop:enable RSpec/VerifiedDoubles

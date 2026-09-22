@@ -170,7 +170,7 @@ module RubyLLM
         end
         raw_messages.each { |message| chat.add_message(create_message(message)) }
 
-        chat.complete
+        RubyLLM::MCP.generate_response(chat)
       end
 
       def preferred_model
@@ -192,7 +192,7 @@ module RubyLLM
         role = message["role"]
         content = create_content_for_message(message["content"])
 
-        RubyLLM::Message.new({ role: role, content: content })
+        RubyLLM::Message.new(role: role, **content.message_options)
       end
 
       def create_content_for_message(content)

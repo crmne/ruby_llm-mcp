@@ -3,6 +3,7 @@
 # Can also run without the MCP fixture servers:
 # bundle exec rspec --options /dev/null spec/ruby_llm/mcp/ruby_llm_compatibility_spec.rb
 require "ruby_llm/mcp"
+require_relative "../../support/simple_multiply_tool"
 
 RSpec.describe "RubyLLM compatibility" do # rubocop:disable RSpec/DescribeClass
   let(:adapter) { double("Adapter") }
@@ -20,6 +21,30 @@ RSpec.describe "RubyLLM compatibility" do # rubocop:disable RSpec/DescribeClass
     allow(adapter).to receive(:execute_tool).with(name: "search", parameters: { query: "hello" }).and_return(result)
   end
 
+  # RubyLLM 1 keeps an MCP::Content as the message content (normalized to a
+  # plain String when it has no attachments); RubyLLM 2 stores text and
+  # attachments on the message itself.
+  def message_text(message)
+    content = message.content
+    content.respond_to?(:text) ? content.text : content
+  end
+
+  def message_attachments(message)
+    content = message.content
+    if content.respond_to?(:attachments)
+      content.attachments
+    elsif message.respond_to?(:attachments)
+      message.attachments
+    else
+      []
+    end
+  end
+
+  def sampling_request(messages, system_prompt: nil)
+    params = { "messages" => messages, "systemPrompt" => system_prompt }.compact
+    RubyLLM::MCP::Sample.new(RubyLLM::MCP::Result.new({ "id" => "1", "params" => params }), nil)
+  end
+
   def split_result(result)
     if defined?(RubyLLM::Content)
       [result.text, result.attachments]
@@ -31,6 +56,18 @@ RSpec.describe "RubyLLM compatibility" do # rubocop:disable RSpec/DescribeClass
   it "exposes the complete server schema through both RubyLLM APIs" do
     expect(tool.params_schema).to eq(schema)
     expect(tool.parameters_schema).to eq(schema)
+  end
+
+  it "declares the fixture tool's parameters with the installed RubyLLM DSL" do
+    tool = SimpleMultiplyTool.new
+    schema = tool.respond_to?(:parameters_schema) ? tool.parameters_schema : tool.params_schema
+    schema = JSON.parse(JSON.generate(schema))
+
+    types = schema["properties"].transform_values { |property| property["type"] }
+
+    expect(types).to eq("x" => "number", "y" => "number")
+    expect(schema["properties"]["x"]["description"]).to eq("First number")
+    expect(schema["required"]).to contain_exactly("x", "y")
   end
 
   it "returns text through RubyLLM's tool invocation" do
@@ -119,11 +156,67 @@ RSpec.describe "RubyLLM compatibility" do # rubocop:disable RSpec/DescribeClass
     expect(content.attachments.first.content).to eq("image bytes")
   end
 
+  it "builds sampling request messages with the installed RubyLLM message API" do
+    text = { "role" => "user", "content" => { "type" => "text", "text" => "Describe this" } }
+    picture = { "role" => "user", "content" => image }
+    sample = sampling_request([text, picture])
+
+    text_message = sample.send(:create_message, text)
+    image_message = sample.send(:create_message, picture)
+
+    expect(text_message).to be_a(RubyLLM::Message)
+    expect(text_message.role).to eq(:user)
+    expect(message_text(text_message)).to eq("Describe this")
+    expect(message_attachments(text_message)).to be_empty
+    expect(message_attachments(image_message).map(&:content)).to eq(["image bytes"])
+  end
+
+  it "builds sampling handler messages with the installed RubyLLM message API" do
+    handler_class = Class.new do
+      include RubyLLM::MCP::Handlers::Concerns::SamplingActions
+
+      def initialize(sample)
+        @sample = sample
+      end
+    end
+    picture = { "role" => "user", "content" => image }
+    handler = handler_class.new(sampling_request([picture], system_prompt: "Be brief"))
+
+    system_message = handler.send(:system_message)
+    image_message = handler.send(:create_message, picture)
+
+    expect(system_message.role).to eq(:system)
+    expect(message_text(system_message)).to eq("Be brief")
+    expect(message_attachments(image_message).map(&:content)).to eq(["image bytes"])
+  end
+
+  it "asks the model to continue an assistant-ended prompt with the installed RubyLLM chat API" do
+    prompt = RubyLLM::MCP::Prompt.new(adapter, "name" => "prefill")
+    messages = [{ "role" => "assistant", "content" => { "type" => "text", "text" => "The answer is" } }]
+    result = RubyLLM::MCP::Result.new({ "result" => { "messages" => messages } })
+    allow(adapter).to receive(:execute_prompt).with(name: "prefill", arguments: {}).and_return(result)
+    chat = RubyLLM.context { |config| config.openai_api_key = "test" }.chat(model: "gpt-4.1", provider: :openai)
+    if RubyLLM::Chat.method_defined?(:generate)
+      expect(chat).to receive(:generate).ordered
+    end
+    expect(chat).to receive(:complete).ordered.and_return(:generated)
+
+    expect(prompt.ask(chat)).to eq(:generated)
+  end
+
   it "formats text sampling responses with the installed RubyLLM message API" do
     message = RubyLLM::Message.new(role: :assistant, content: "hello")
     response = RubyLLM::MCP::Native::Messages::Responses.sampling_create_message(id: 1, message: message, model: "test")
 
     expect(response[:result][:content]).to eq(type: "text", text: "hello")
+  end
+
+  it "reports the installed RubyLLM message's finish reason as the MCP stop reason" do
+    message = RubyLLM::Message.new(role: :assistant, content: "hello", finish_reason: :max_tokens)
+    expected = RubyLLM::Message.method_defined?(:finish_reason) ? "maxTokens" : "endTurn"
+    response = RubyLLM::MCP::Native::Messages::Responses.sampling_create_message(id: 1, message: message, model: "test")
+
+    expect(response[:result][:stopReason]).to eq(expected)
   end
 
   it "formats image sampling responses with base64 data" do
@@ -133,5 +226,22 @@ RSpec.describe "RubyLLM compatibility" do # rubocop:disable RSpec/DescribeClass
     response = RubyLLM::MCP::Native::Messages::Responses.sampling_create_message(id: 1, message: message, model: "test")
 
     expect(response[:result][:content]).to eq(type: :image, data: image["data"], mimeType: "image/png")
+  end
+
+  it "formats mixed sampling responses as a content array when the negotiated protocol allows one" do
+    attachments = [image, image].map { |block| RubyLLM::MCP::Attachment.new(block["data"], block["mimeType"]) }
+    content = RubyLLM::MCP::Content.new(text: "Two pictures", attachments: attachments)
+    message = RubyLLM::Message.new(role: :assistant, **content.message_options)
+    response = RubyLLM::MCP::Native::Messages::Responses.sampling_create_message(
+      id: 1, message: message, model: "test", protocol_version: "2025-11-25"
+    )
+
+    expect(response[:result][:content]).to eq(
+      [
+        { type: "text", text: "Two pictures" },
+        { type: :image, data: image["data"], mimeType: "image/png" },
+        { type: :image, data: image["data"], mimeType: "image/png" }
+      ]
+    )
   end
 end
