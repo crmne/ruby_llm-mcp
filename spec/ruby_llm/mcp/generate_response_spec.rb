@@ -80,9 +80,6 @@ RSpec.describe RubyLLM::MCP, ".generate_response" do
       }
     )
     sample = RubyLLM::MCP::Sample.new(input, nil)
-    # Message construction is covered by the sampling specs; this example only
-    # checks the completion sequence.
-    allow(sample).to receive(:create_message).and_return(double("Message"))
     chat = double("Chat")
     allow(RubyLLM::Chat).to receive(:new).and_return(chat)
     allow(chat).to receive(:add_message)

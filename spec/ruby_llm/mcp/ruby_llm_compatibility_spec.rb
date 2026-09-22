@@ -20,6 +20,30 @@ RSpec.describe "RubyLLM compatibility" do # rubocop:disable RSpec/DescribeClass
     allow(adapter).to receive(:execute_tool).with(name: "search", parameters: { query: "hello" }).and_return(result)
   end
 
+  # RubyLLM 1 keeps an MCP::Content as the message content (normalized to a
+  # plain String when it has no attachments); RubyLLM 2 stores text and
+  # attachments on the message itself.
+  def message_text(message)
+    content = message.content
+    content.respond_to?(:text) ? content.text : content
+  end
+
+  def message_attachments(message)
+    content = message.content
+    if content.respond_to?(:attachments)
+      content.attachments
+    elsif message.respond_to?(:attachments)
+      message.attachments
+    else
+      []
+    end
+  end
+
+  def sampling_request(messages, system_prompt: nil)
+    params = { "messages" => messages, "systemPrompt" => system_prompt }.compact
+    RubyLLM::MCP::Sample.new(RubyLLM::MCP::Result.new({ "id" => "1", "params" => params }), nil)
+  end
+
   def split_result(result)
     if defined?(RubyLLM::Content)
       [result.text, result.attachments]
@@ -117,6 +141,40 @@ RSpec.describe "RubyLLM compatibility" do # rubocop:disable RSpec/DescribeClass
     content = defined?(RubyLLM::Content) ? message.content : message
 
     expect(content.attachments.first.content).to eq("image bytes")
+  end
+
+  it "builds sampling request messages with the installed RubyLLM message API" do
+    text = { "role" => "user", "content" => { "type" => "text", "text" => "Describe this" } }
+    picture = { "role" => "user", "content" => image }
+    sample = sampling_request([text, picture])
+
+    text_message = sample.send(:create_message, text)
+    image_message = sample.send(:create_message, picture)
+
+    expect(text_message).to be_a(RubyLLM::Message)
+    expect(text_message.role).to eq(:user)
+    expect(message_text(text_message)).to eq("Describe this")
+    expect(message_attachments(text_message)).to be_empty
+    expect(message_attachments(image_message).map(&:content)).to eq(["image bytes"])
+  end
+
+  it "builds sampling handler messages with the installed RubyLLM message API" do
+    handler_class = Class.new do
+      include RubyLLM::MCP::Handlers::Concerns::SamplingActions
+
+      def initialize(sample)
+        @sample = sample
+      end
+    end
+    picture = { "role" => "user", "content" => image }
+    handler = handler_class.new(sampling_request([picture], system_prompt: "Be brief"))
+
+    system_message = handler.send(:system_message)
+    image_message = handler.send(:create_message, picture)
+
+    expect(system_message.role).to eq(:system)
+    expect(message_text(system_message)).to eq("Be brief")
+    expect(message_attachments(image_message).map(&:content)).to eq(["image bytes"])
   end
 
   it "asks the model to continue an assistant-ended prompt with the installed RubyLLM chat API" do
