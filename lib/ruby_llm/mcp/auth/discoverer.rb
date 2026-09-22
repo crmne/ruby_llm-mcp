@@ -23,6 +23,10 @@ module RubyLLM
           logger.debug("Discovering OAuth authorization server for #{server_url}")
 
           cached = storage.get_server_metadata(server_url)
+          if cached
+            validate_server_metadata_object!(cached)
+            return cached
+          end
 
           # Prefer protected resource metadata discovery to follow MCP authorization rules,
           # then fall back to direct auth server metadata discovery for compatibility.
