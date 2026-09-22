@@ -105,18 +105,7 @@ module RubyLLM
       end
 
       def read_response(uri: @uri)
-        parsed = URI.parse(uri)
-        case parsed.scheme
-        when "http", "https"
-          fetch_uri_content(uri)
-        else # file:// or git://
-          @adapter.resource_read(uri: uri)
-        end
-      end
-
-      def fetch_uri_content(uri)
-        response = HTTPX.get(uri)
-        { "result" => { "contents" => [{ "text" => response.body }] } }
+        @adapter.resource_read(uri: uri)
       end
     end
   end

@@ -284,7 +284,7 @@ module RubyLLM
               token = @oauth_provider.access_token
               if token
                 headers["Authorization"] = token.to_header
-                RubyLLM::MCP.logger.debug "Applied OAuth authorization header: #{token.to_header}"
+                RubyLLM::MCP.logger.debug "Applied OAuth authorization header"
               else
                 RubyLLM::MCP.logger.warn "OAuth provider present but no valid token available!"
                 RubyLLM::MCP.logger.warn "  This means the token is not in storage or has expired"
