@@ -3,6 +3,7 @@
 # Can also run without the MCP fixture servers:
 # bundle exec rspec --options /dev/null spec/ruby_llm/mcp/ruby_llm_compatibility_spec.rb
 require "ruby_llm/mcp"
+require_relative "../../support/simple_multiply_tool"
 
 RSpec.describe "RubyLLM compatibility" do # rubocop:disable RSpec/DescribeClass
   let(:adapter) { double("Adapter") }
@@ -55,6 +56,18 @@ RSpec.describe "RubyLLM compatibility" do # rubocop:disable RSpec/DescribeClass
   it "exposes the complete server schema through both RubyLLM APIs" do
     expect(tool.params_schema).to eq(schema)
     expect(tool.parameters_schema).to eq(schema)
+  end
+
+  it "declares the fixture tool's parameters with the installed RubyLLM DSL" do
+    tool = SimpleMultiplyTool.new
+    schema = tool.respond_to?(:parameters_schema) ? tool.parameters_schema : tool.params_schema
+    schema = JSON.parse(JSON.generate(schema))
+
+    types = schema["properties"].transform_values { |property| property["type"] }
+
+    expect(types).to eq("x" => "number", "y" => "number")
+    expect(schema["properties"]["x"]["description"]).to eq("First number")
+    expect(schema["required"]).to contain_exactly("x", "y")
   end
 
   it "returns text through RubyLLM's tool invocation" do
