@@ -9,6 +9,14 @@ module RubyLLM
         module Responses
           extend Helpers
 
+          # RubyLLM 2 finish reasons mapped to the stop reasons MCP defines.
+          FINISH_REASON_TO_STOP_REASON = {
+            stop: "endTurn",
+            max_tokens: "maxTokens",
+            tool_calls: "toolUse",
+            content_filter: "contentFilter"
+          }.freeze
+
           module_function
 
           def ping(id:)
@@ -45,7 +53,9 @@ module RubyLLM
           end
 
           def sampling_create_message(id:, message:, model:)
-            stop_reason = if message.respond_to?(:stop_reason) && message.stop_reason
+            stop_reason = if message.respond_to?(:finish_reason) && message.finish_reason
+                            finish_reason_to_stop_reason(message.finish_reason)
+                          elsif message.respond_to?(:stop_reason) && message.stop_reason
                             snake_to_camel(message.stop_reason)
                           else
                             "endTurn"
@@ -108,6 +118,12 @@ module RubyLLM
             end
           end
           private_class_method :format_message_content
+
+          def finish_reason_to_stop_reason(reason)
+            # Unknown reasons are camelized as a best effort; MCP permits any string.
+            FINISH_REASON_TO_STOP_REASON.fetch(reason.to_sym) { snake_to_camel(reason.to_s) }
+          end
+          private_class_method :finish_reason_to_stop_reason
 
           def snake_to_camel(str)
             parts = str.split("_")
